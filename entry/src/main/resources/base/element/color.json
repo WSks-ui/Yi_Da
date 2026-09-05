@@ -1,0 +1,15 @@
+{
+  "color": [
+    {
+      "name": "start_window_background",
+      "value": "#FFFFFF"
+    },
+    { "name": "surface", "value": "#F6F7F8" },
+    { "name": "panel", "value": "#ECEFF0" },
+    { "name": "ink", "value": "#20282B" },
+    { "name": "muted", "value": "#667278" },
+    { "name": "line", "value": "#D7DFE1" },
+    { "name": "accent", "value": "#236853" },
+    { "name": "danger", "value": "#B03946" }
+  ]
+}

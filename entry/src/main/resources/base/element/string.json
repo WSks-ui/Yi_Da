@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "艺搭本地衣橱"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "管理已有衣物与穿搭"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "艺搭"
+    }
+  ]
+}

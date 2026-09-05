@@ -1,0 +1,12 @@
+T-shirt.jpg
+Author: Lateiner
+Source: https://commons.wikimedia.org/wiki/File:T-shirt.jpg
+Image: https://upload.wikimedia.org/wikipedia/commons/0/09/T-shirt.jpg
+License selected: Creative Commons Attribution-Share Alike 3.0 Unported
+License URL: https://creativecommons.org/licenses/by-sa/3.0/
+Downloaded: 2026-09-05
+SHA-256: ae2d83046841cec10ff5260f989f59b6cee7c2851b0ce6ab38579cd6d7c4c20e
+The bundled source photograph is unmodified. In-app resizing, orientation normalization
+and JPEG thumbnails remain under the same image license.
+Used only in the separate demo wardrobe. The pictured brand does not endorse Yi_Da.
+This asset is not an authorized person-photo or AI try-on quality fixture.
