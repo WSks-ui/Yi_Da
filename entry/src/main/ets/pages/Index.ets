@@ -4,6 +4,7 @@ import { Palette } from '../common/components/Palette';
 import { ShellViewModel } from '../features/ShellViewModel';
 import { GarmentDetailPage } from '../features/wardrobe/pages/GarmentDetailPage';
 import { GarmentEditPage } from '../features/wardrobe/pages/GarmentEditPage';
+import { ImportQueuePage } from '../features/wardrobe/pages/ImportQueuePage';
 import { WardrobePage } from '../features/wardrobe/pages/WardrobePage';
 import { GarmentRoute } from '../navigation/GarmentRoute';
 
@@ -30,13 +31,16 @@ struct Index {
     if (name === 'garmentEdit') {
       GarmentEditPage({
         garmentId: (param as GarmentRoute).id, space: (param as GarmentRoute).space, stack: this.stack,
-        onSaved: () => { this.vm.wardrobe.notice = '衣物已保存'; this.vm.refresh(); }
+        onSaved: () => { this.vm.wardrobe.notice = '衣物已保存'; this.vm.refresh(); },
+        onClosed: () => { this.vm.refresh(); }
       })
     } else if (name === 'garmentDetail') {
       GarmentDetailPage({
         garmentId: (param as GarmentRoute).id, space: (param as GarmentRoute).space, stack: this.stack,
         onChanged: () => { this.vm.refresh(); }
       })
+    } else if (name === 'garmentImport') {
+      ImportQueuePage({ stack: this.stack, onChanged: () => { this.vm.refresh(); } })
     }
   }
 
@@ -102,6 +106,7 @@ struct Index {
             WardrobePage({
               vm: this.vm.wardrobe, service: this.vm.services?.wardrobe,
               onAdd: () => { this.add(); },
+              onImport: () => { this.stack.pushPath({ name: 'garmentImport' }); },
               onDetail: (id: string) => {
                 this.stack.pushPath({ name: 'garmentDetail', param: new GarmentRoute(id, this.vm.wardrobe.space) });
               },

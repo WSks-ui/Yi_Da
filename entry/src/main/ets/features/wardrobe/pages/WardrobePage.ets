@@ -3,18 +3,21 @@ import { GarmentPhoto } from '../../../common/components/GarmentPhoto';
 import { BatchChange, CATEGORIES, CATEGORY_LABELS, Garment, categoryLabel, seasonLabel, STATUSES, STATUS_LABELS, statusLabel } from '../../../domain/models/Garment';
 import { WardrobeService } from '../../../domain/usecases/WardrobeService';
 import { WardrobeViewModel } from '../viewmodels/WardrobeViewModel';
+import { toggleSeason } from '../../../domain/usecases/ImportPolicy';
 
 @ComponentV2
 export struct WardrobePage {
   @Param vm: WardrobeViewModel = new WardrobeViewModel();
   @Param service: WardrobeService | undefined = undefined;
   @Event onAdd: () => void = () => {};
+  @Event onImport: () => void = () => {};
   @Event onDetail: (id: string) => void = () => {};
   @Event onChanged: () => void = () => {};
   @Local showBatch: boolean = false;
   @Local batchStatus: number = 0;
   @Local batchCategory: number = 0;
   @Local batchSeason: number = 0;
+  @Local changeSeason: boolean = false;
   private scroller: Scroller = new Scroller();
 
   private photoPath(garment: Garment): string {
@@ -35,28 +38,46 @@ export struct WardrobePage {
 
   @Builder
   batchSheet() {
+    Scroll() {
     Column({ space: 16 }) {
       Text(`批量修改 · ${this.vm.selected.length} 件`).fontSize(20).fontWeight(FontWeight.Bold).fontColor(Palette.text)
       Select(['状态不变', ...STATUS_LABELS].map((value: string): SelectOption => { return { value: value }; }))
-        .selected(this.batchStatus).value(['状态不变', ...STATUS_LABELS][this.batchStatus])
+        .selected(this.batchStatus).value(['状态不变', ...STATUS_LABELS][this.batchStatus]).id('batchStatus')
         .width('100%').onSelect((index: number) => { this.batchStatus = index; })
       Select(['类别不变', ...CATEGORY_LABELS].map((value: string): SelectOption => { return { value: value }; }))
-        .selected(this.batchCategory).value(['类别不变', ...CATEGORY_LABELS][this.batchCategory])
+        .selected(this.batchCategory).value(['类别不变', ...CATEGORY_LABELS][this.batchCategory]).id('batchCategory')
         .width('100%').onSelect((index: number) => { this.batchCategory = index; })
-      Select(['季节不变', '未知', '春', '夏', '秋', '冬', '四季'].map((value: string): SelectOption => { return { value: value }; }))
-        .selected(this.batchSeason).value(['季节不变', '未知', '春', '夏', '秋', '冬', '四季'][this.batchSeason])
-        .width('100%').onSelect((index: number) => { this.batchSeason = index; })
+      Row() {
+        Text('修改适用季节').fontSize(15).fontColor(Palette.text).layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.changeSeason }).selectedColor(Palette.accent).id('batchChangeSeason')
+          .onChange((value: boolean) => { this.changeSeason = value; })
+      }.width('100%')
+      if (this.changeSeason) {
+        Row() {
+          ForEach(['春', '夏', '秋', '冬'], (name: string, index: number) => {
+            Row() {
+              Checkbox({ name: name }).select((this.batchSeason & (1 << index)) !== 0)
+                .selectedColor(Palette.accent).id(`batchSeason-${index}`)
+                .onChange((value: boolean) => { this.batchSeason = toggleSeason(this.batchSeason, index, value); })
+                .margin({ right: 4 })
+              Text(name).fontSize(14).fontColor(Palette.text)
+            }.layoutWeight(1)
+          })
+        }.width('100%')
+        Text(seasonLabel(this.batchSeason)).fontSize(13).fontColor(Palette.muted).width('100%')
+      }
       if (this.vm.error) { Text(this.vm.error).fontSize(14).fontColor(Palette.danger) }
-      Button('应用修改', { type: ButtonType.Normal }).height(48).width('100%')
+      Button('应用修改', { type: ButtonType.Normal }).height(48).width('100%').id('applyBatch')
         .backgroundColor(Palette.accent).borderRadius(6).enabled(!this.vm.busy)
         .onClick(async () => {
           const change = new BatchChange();
           change.status = this.batchStatus > 0 ? STATUSES[this.batchStatus - 1] : '';
           change.category = this.batchCategory > 0 ? CATEGORIES[this.batchCategory - 1] : '';
-          change.seasonMask = [-1, 0, 1, 2, 4, 8, 15][this.batchSeason];
+          change.seasonMask = this.changeSeason ? this.batchSeason : -1;
           if (await this.vm.batch(change)) { this.showBatch = false; this.onChanged(); }
         })
-    }.padding(24).width('100%')
+    }.enabled(!this.vm.busy).padding(24).width('100%')
+    }.width('100%')
   }
 
   build() {
@@ -68,6 +89,7 @@ export struct WardrobePage {
             .selected(this.vm.space === 'demo' ? 1 : 0)
             .value(this.vm.space === 'demo' ? '示例衣橱' : '个人衣橱')
             .font({ size: 13 }).height(32).id('wardrobeSpace')
+            .enabled(!this.vm.busy)
             .onSelect((index: number) => {
               this.vm.space = index === 1 ? 'demo' : 'personal'; this.vm.resetFilters();
             })
@@ -76,6 +98,10 @@ export struct WardrobePage {
           .fontSize(14).borderRadius(6).backgroundColor(Palette.panel).fontColor(Palette.text)
           .enabled(!this.vm.busy).onClick(() => { this.vm.selecting = !this.vm.selecting; this.vm.selected = []; })
         if (this.vm.space === 'personal') {
+          Button({ type: ButtonType.Normal }) {
+            SymbolGlyph($r('sys.symbol.ohos_photo')).fontSize(22).fontColor([Palette.accent])
+          }.id('importPhotos').width(44).height(44).borderRadius(6).backgroundColor(Palette.panel)
+            .accessibilityText('从相册批量导入衣物').enabled(!this.vm.busy).onClick(() => { this.onImport(); })
           Button({ type: ButtonType.Normal }) {
             Image($r('sys.media.ohos_ic_public_add')).width(22).height(22).fillColor(Color.White)
           }.id('addGarment').width(44).height(44).borderRadius(6).backgroundColor(Palette.accent)
@@ -100,7 +126,7 @@ export struct WardrobePage {
       }.width('100%')
       if (this.vm.selecting) {
         Row({ space: 8 }) {
-          Checkbox().select(this.vm.items.length > 0 && this.vm.selected.length === this.vm.items.length)
+          Checkbox().select(this.vm.items.length > 0 && this.vm.selected.length === this.vm.items.length).id('batchSelectAll')
             .onChange((value: boolean) => {
               this.vm.selected = value ? this.vm.items.slice(0, 200).map((item: Garment) => item.id) : [];
             }).selectedColor(Palette.accent).accessibilityText('全选当前结果，最多200件')
@@ -108,7 +134,8 @@ export struct WardrobePage {
           Button('修改', { type: ButtonType.Normal }).fontSize(14).backgroundColor(Palette.accent).borderRadius(6)
             .enabled(this.vm.selected.length > 0 && !this.vm.busy)
             .onClick(() => {
-              this.batchCategory = 0; this.batchStatus = 0; this.batchSeason = 0; this.vm.error = ''; this.showBatch = true;
+              this.batchCategory = 0; this.batchStatus = 0; this.batchSeason = 0;
+              this.changeSeason = false; this.vm.error = ''; this.showBatch = true;
             })
           if (this.vm.status === 'archived') {
             Button({ type: ButtonType.Normal }) {
@@ -147,6 +174,8 @@ export struct WardrobePage {
                 .enabled(!this.vm.busy).onClick(() => { this.vm.addSample(); })
             } else {
               Button('添加第一件衣物').backgroundColor(Palette.accent).onClick(() => { this.onAdd(); })
+              Button('相册批量导入', { type: ButtonType.Normal }).borderRadius(6)
+                .backgroundColor(Palette.panel).fontColor(Palette.accent).onClick(() => { this.onImport(); })
             }
           }
         }.layoutWeight(1).justifyContent(FlexAlign.Center)
@@ -184,6 +213,6 @@ export struct WardrobePage {
       }
     }.padding({ left: 20, right: 20, top: 18, bottom: 8 }).width('100%').height('100%')
       .backgroundColor(Palette.background)
-      .bindSheet($$this.showBatch, this.batchSheet(), { height: 450, showClose: true })
+      .bindSheet($$this.showBatch, this.batchSheet(), { height: 530, showClose: true })
   }
 }

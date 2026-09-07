@@ -6,6 +6,16 @@
       "phone"
     ],
     "deliveryWithInstall": true,
-    "installationFree": false
+    "installationFree": false,
+    "pages": "$profile:fixture_pages",
+    "abilities": [
+      {
+        "name": "MediaFixtureAbility",
+        "srcEntry": "./ets/fixtures/MediaFixtureAbility.ets",
+        "startWindowIcon": "$media:layered_image",
+        "startWindowBackground": "$color:test_start_background",
+        "exported": true
+      }
+    ]
   }
 }

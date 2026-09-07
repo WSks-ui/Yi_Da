@@ -1,6 +1,8 @@
 import { BatchChange, GarmentDraft, PreparedPhoto, VersionedId, WardrobeFilter } from '../models/Garment';
 import { GarmentRepository } from '../repositories/GarmentRepository';
 import { MediaRepository } from '../repositories/MediaRepository';
+import { AppError } from '../../common/errors/AppError';
+import { validateDraft } from './GarmentRules';
 
 export class WardrobeService {
   private queue: Promise<void> = Promise.resolve();
@@ -20,8 +22,15 @@ export class WardrobeService {
     });
   }
 
-  save(draft: GarmentDraft, photo?: PreparedPhoto): Promise<string> {
+  save(draft: GarmentDraft, photo?: PreparedPhoto, allowDuplicate: boolean = false): Promise<string> {
     return this.enqueue(async (): Promise<string> => {
+      validateDraft(draft);
+      // 在串行提交队列内再次检查，防止两项同时确认后都绕过重复提示。
+      // 仅比较标准化文件摘要，不宣称能识别视觉相似照片。
+      if (photo && !allowDuplicate &&
+        await this.repository.hasImageHash(draft.space, photo.original.sha256, draft.id)) {
+        throw new AppError('DUPLICATE_PHOTO', '当前衣橱已有相同照片，请确认是否仍要添加。');
+      }
       const id = await this.repository.save(draft, photo);
       if (photo) { this.photos.release(photo); }
       await this.cleanup();

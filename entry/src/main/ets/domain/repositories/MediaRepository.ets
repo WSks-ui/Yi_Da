@@ -3,6 +3,7 @@ import { PreparedPhoto } from '../models/Garment';
 export interface MediaRepository {
   initialize(): Promise<void>;
   pick(): Promise<string>;
+  pickMany(limit: number): Promise<string[]>;
   prepare(uri: string): Promise<PreparedPhoto>;
   prepareSample(): Promise<PreparedPhoto>;
   absolute(relativePath: string): string;

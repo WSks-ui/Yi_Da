@@ -119,6 +119,16 @@ export class RdbGarmentRepository implements GarmentRepository {
     });
   }
 
+  async hasImageHash(space: string, hash: string, excludeId: string): Promise<boolean> {
+    return this.database.run(async (store: relationalStore.RdbStore): Promise<boolean> => {
+      // 包括归档单品，但绝不跨 personal/demo 暗示另一空间中的素材。
+      const rows = await store.querySql(`SELECT 1 FROM garment g
+        JOIN media_asset m ON g.image_asset_id=m.id
+        WHERE g.space=? AND m.sha256=? AND g.id<>? LIMIT 1`, [space, hash, excludeId]);
+      try { return rows.rowCount > 0; } finally { rows.close(); }
+    });
+  }
+
   async batchChange(space: string, ids: VersionedId[], change: BatchChange): Promise<void> {
     validateBatch(ids, change);
     await this.database.transaction(async (tx: relationalStore.RdbStore): Promise<void> => {

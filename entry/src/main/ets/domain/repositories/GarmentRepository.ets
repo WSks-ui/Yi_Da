@@ -3,6 +3,7 @@ import { BatchChange, Garment, GarmentDraft, PreparedPhoto, VersionedId, Wardrob
 export interface GarmentRepository {
   list(filter: WardrobeFilter): Promise<Garment[]>;
   get(id: string, space: string): Promise<Garment>;
+  hasImageHash(space: string, hash: string, excludeId: string): Promise<boolean>;
   save(draft: GarmentDraft, photo?: PreparedPhoto): Promise<string>;
   batchChange(space: string, ids: VersionedId[], change: BatchChange): Promise<void>;
   deleteArchived(space: string, ids: VersionedId[]): Promise<void>;

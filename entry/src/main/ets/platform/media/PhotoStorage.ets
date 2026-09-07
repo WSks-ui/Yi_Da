@@ -8,6 +8,7 @@ import { AppError } from '../../common/errors/AppError';
 import { MediaAsset, PreparedPhoto } from '../../domain/models/Garment';
 import { MediaRepository } from '../../domain/repositories/MediaRepository';
 import { mediaRelativePath, scaledSize } from '../../domain/usecases/GarmentRules';
+import { validatePickLimit } from '../../domain/usecases/ImportPolicy';
 
 const MAX_BYTES: number = 10 * 1024 * 1024;
 const ORIGINAL_EDGE: number = 2048;
@@ -32,11 +33,18 @@ export class PhotoStorage implements MediaRepository {
   }
 
   async pick(): Promise<string> {
+    const uris = await this.pickMany(1);
+    return uris.length > 0 ? uris[0] : '';
+  }
+
+  async pickMany(limit: number): Promise<string[]> {
+    validatePickLimit(limit);
     const result = await new photoAccessHelper.PhotoViewPicker().select({
-      MIMEType: photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE, maxSelectNumber: 1
+      MIMEType: photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE, maxSelectNumber: limit
     });
     // 用户取消返回空结果，不作为权限错误，也不清掉编辑中的已有图片。
-    return result.photoUris.length > 0 ? result.photoUris[0] : '';
+    if (result.photoUris.length > limit) { throw new AppError('IMPORT_LIMIT', '选图数量异常，请重新选择。'); }
+    return result.photoUris;
   }
 
   absolute(relativePath: string): string {

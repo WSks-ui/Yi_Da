@@ -10,6 +10,19 @@ import { RdbGarmentRepository } from '../../../main/ets/data/repositories/RdbGar
 import { BatchChange, GarmentDraft, VersionedId, WardrobeFilter } from '../../../main/ets/domain/models/Garment';
 import { PhotoStorage } from '../../../main/ets/platform/media/PhotoStorage';
 import { WardrobeService } from '../../../main/ets/domain/usecases/WardrobeService';
+import { ImportQueueViewModel } from '../../../main/ets/features/wardrobe/viewmodels/ImportQueueViewModel';
+import { validatePickLimit } from '../../../main/ets/domain/usecases/ImportPolicy';
+
+// 错误文件无法放进真实图库；此适配器只在故障注入测试中重放选图列表。
+// 实际 PhotoViewPicker 端到端证据由独立页面流程取得，不能拿此替身充数。
+class ReplayPhotoStorage extends PhotoStorage {
+  selectedPaths: string[] = [];
+
+  async pickMany(limit: number): Promise<string[]> {
+    validatePickLimit(limit);
+    return this.selectedPaths.slice(0, limit);
+  }
+}
 
 export default function wardrobeTest(): void {
   describe('WardrobeRuntime', () => {
@@ -260,6 +273,103 @@ export default function wardrobeTest(): void {
             } finally { await result.release(); }
           } finally { await output.release(); }
         } finally { await photos.discard(prepared); await fs.unlink(path); }
+      }
+    });
+
+    it('realFileQueueKeepsFourGoodItemsAndReopensSavedRecords', 0, async () => {
+      const replay = new ReplayPhotoStorage(context, namespace);
+      const queueService = new WardrobeService(repository, replay);
+      const queue = new ImportQueueViewModel();
+      queue.connect(queueService);
+      const content = await context.resourceManager.getRawFileContent('demo/tshirt.jpg');
+      const paths: string[] = [];
+      try {
+        for (let index = 0; index < 5; index++) {
+          const path = `${context.filesDir}/${namespace}/queue-${index}.jpg`;
+          const file = await fs.open(path, fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC);
+          try {
+            const data = index === 2 ? new util.TextEncoder().encodeInto('not-a-real-jpeg') : content;
+            const bytes = new ArrayBuffer(data.byteLength);
+            new Uint8Array(bytes).set(data);
+            let offset = 0;
+            while (offset < bytes.byteLength) {
+              const written = await fs.write(file.fd, bytes.slice(offset));
+              if (written < 1) { throw new Error('QA write failed'); }
+              offset += written;
+            }
+          } finally { await fs.close(file); }
+          paths.push(path);
+        }
+        replay.selectedPaths = paths;
+        await queue.pick();
+        expect(queue.items.filter((item) => item.phase === 'ready').length).assertEqual(4);
+        expect(queue.items[2].phase).assertEqual('failed');
+        for (let index = 0; index < queue.items.length; index++) {
+          const item = queue.items[index];
+          if (item.phase !== 'ready') { continue; }
+          item.name = `QA_Queue_Runtime_${index}`;
+          item.category = 'top';
+          item.confirmed = true;
+          item.allowDuplicate = true;
+        }
+        await queue.saveConfirmed();
+        expect(queue.savedCount()).assertEqual(4);
+        expect(queue.items[2].phase).assertEqual('failed');
+        await queue.dispose();
+        await database.close();
+        const filter = new WardrobeFilter();
+        filter.search = 'QA_Queue_Runtime_';
+        const saved = await repository.list(filter);
+        expect(saved.length).assertEqual(4);
+        for (const garment of saved) {
+          expect(await fs.access(replay.absolute(garment.imagePath))).assertTrue();
+          expect(await fs.access(replay.absolute(garment.thumbnailPath))).assertTrue();
+        }
+        const ids = saved.map((garment) => new VersionedId(garment.id, garment.version));
+        const archive = new BatchChange();
+        archive.status = 'archived';
+        await queueService.batch('personal', ids, archive);
+        await queueService.deleteArchived('personal', ids.map((id) => new VersionedId(id.id, id.version + 1)));
+        expect(queueService.cleanupPending).assertFalse();
+      } finally {
+        await queue.dispose();
+        for (const path of paths) { if (await fs.access(path)) { await fs.unlink(path); } }
+      }
+    });
+
+    it('duplicateHashIsSpaceScopedAndOverrideIsExplicit', 0, async () => {
+      const firstPhoto = await photos.prepareSample();
+      const draft = new GarmentDraft();
+      draft.name = 'QA_Hash_First';
+      const id = await service.save(draft, firstPhoto);
+      expect(await repository.hasImageHash('personal', firstPhoto.original.sha256, '')).assertTrue();
+      expect(await repository.hasImageHash('personal', firstPhoto.original.sha256, id)).assertFalse();
+      expect(await repository.hasImageHash('demo', firstPhoto.original.sha256, '')).assertFalse();
+      const secondPhoto = await photos.prepareSample();
+      draft.name = 'QA_Hash_Second';
+      await expect(service.save(draft, secondPhoto)).assertPromiseIsRejected();
+      expect(await fs.access(photos.absolute(secondPhoto.original.relativePath))).assertTrue();
+      const secondId = await service.save(draft, secondPhoto, true);
+      const archive = new BatchChange();
+      archive.status = 'archived';
+      await service.batch('personal', [new VersionedId(id, 1), new VersionedId(secondId, 1)], archive);
+      // 已归档衣物也必须提示相同照片，不能把归档当作防重复的漏洞。
+      expect(await repository.hasImageHash('personal', firstPhoto.original.sha256, '')).assertTrue();
+      await service.deleteArchived('personal', [new VersionedId(id, 2), new VersionedId(secondId, 2)]);
+    });
+
+    it('allSeasonMasksPersistWithoutChangingOtherFields', 0, async () => {
+      for (let mask = 0; mask < 16; mask++) {
+        const current = await repository.get(firstId, 'personal');
+        const change = new BatchChange();
+        change.seasonMask = mask;
+        await service.batch('personal', [new VersionedId(current.id, current.version)], change);
+        const changed = await repository.get(firstId, 'personal');
+        expect(changed.seasonMask).assertEqual(mask);
+        expect(changed.name).assertEqual(current.name);
+        expect(changed.status).assertEqual(current.status);
+        expect(changed.category).assertEqual(current.category);
+        expect(changed.version).assertEqual(current.version + 1);
       }
     });
 

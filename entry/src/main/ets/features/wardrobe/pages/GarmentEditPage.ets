@@ -11,10 +11,11 @@ export struct GarmentEditPage {
   @Param space: string = 'personal';
   @Param stack: NavPathStack = new NavPathStack();
   @Event onSaved: () => void = () => {};
+  @Event onClosed: () => void = () => {};
   @Local vm: GarmentEditorViewModel = new GarmentEditorViewModel();
 
   aboutToAppear(): void { this.load(); }
-  aboutToDisappear(): void { this.vm.dispose(); }
+  aboutToDisappear(): void { this.vm.dispose().then(() => { this.onClosed(); }); }
 
   private load(): void {
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -63,6 +64,13 @@ export struct GarmentEditPage {
               }.width('100%').height(220)
               if (this.vm.error) {
                 Text(this.vm.error).id('editorError').fontSize(14).fontColor(Palette.danger).width('100%')
+              }
+              if (this.vm.duplicate) {
+                Row() {
+                  Checkbox().select(this.vm.allowDuplicate).selectedColor(Palette.accent)
+                    .onChange((value: boolean) => { this.vm.allowDuplicate = value; })
+                  Text('仍作为另一件衣物保存').fontSize(14).fontColor(Palette.text).layoutWeight(1)
+                }.width('100%')
               }
               if (this.vm.busy) {
                 Row({ space: 8 }) {

@@ -75,6 +75,11 @@ export class WardrobeViewModel {
   }
 
   toggle(id: string): void {
+    if (this.busy || !this.items.some((item: Garment) => item.id === id)) { return; }
+    if (!this.selected.includes(id) && this.selected.length >= 200) {
+      this.error = '单次最多选择 200 件衣物。';
+      return;
+    }
     this.selected = this.selected.includes(id) ? this.selected.filter((value: string) => value !== id) : [...this.selected, id];
   }
 
