@@ -1,0 +1,41 @@
+{
+  "skill_name": "harmonyos-review",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "审查这个 ArkTS 项目的保存与数据库链路。只报告源码能证明的真实问题，不改代码；重点看 ResultSet、事务、文件替换和并发保存。",
+      "expected_output": "从配置和调用链建立范围，只报告可达且有影响的数据库、文件或竞态缺陷。",
+      "files": [],
+      "expectations": [
+        "先读取项目配置并追踪保存调用链",
+        "正则命中只作为线索，每个 finding 都检查完整成功失败清理路径",
+        "每个 finding 给出精确文件行、触发条件、影响和聚焦修复建议",
+        "不创建报告、不打分、不估工时、不修改代码"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "帮我做一次 HarmonyOS 权限与隐私审计。项目里搜到很多 token、key 和 requestPermissionsFromUser，请判断哪些是真问题。",
+      "expected_output": "区分字段名、占位符、测试数据与真实秘密，并按项目 API 验证权限类型、声明和运行时流程。",
+      "files": [],
+      "expectations": [
+        "不把 token 或 key 的文本命中直接报告为泄密",
+        "按项目实际 SDK 和官方权限参考验证权限行为",
+        "检查拒绝撤销降级路径及敏感数据流",
+        "将无法验证的账号政策或运行时行为列为覆盖缺口而非 finding"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Review the current PR for lifecycle leaks and stale async updates. Return findings only; if nothing is proven, say so and list what you could not run.",
+      "expected_output": "审查精确 diff 及受影响调用方，尝试推翻候选问题，并以 findings-first 形式返回。",
+      "files": [],
+      "expectations": [
+        "确定 review base 并同时检查 diff 与受影响调用方",
+        "验证注册释放使用相同实例或回调身份",
+        "检查导航离开、销毁、取消和乱序完成路径",
+        "没有达到证据门槛时明确无 findings，并分开列出未运行验证"
+      ]
+    }
+  ]
+}
