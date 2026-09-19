@@ -1,0 +1,26 @@
+/node_modules
+/oh_modules
+/local.properties
+/.idea
+**/build
+/.hvigor
+.cxx
+/.clangd
+/.clang-format
+/.clang-tidy
+**/.test
+/.appanalyzer
+
+# 联调时由 scripts/dump-ui.ps1 产生的临时布局文件
+/yida-layout.json
+/yida-screen.png
+
+# 联调证据与发布产物：截图、调试 HAP、发布 zip、现场备份都不入代码历史。
+# 需要时按 docs/ 里的说明重新生成或单独分发，避免仓库被几十 MB 二进制撑大。
+/artifacts
+
+# 构建输出与临时缓存（构建日志、hvigor/IDE 生成的中间结果）
+/build-out.log
+/chk.json
+/r.json
+/v.json

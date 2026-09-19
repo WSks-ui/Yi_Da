@@ -1,0 +1,24 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "艺起搭数字衣橱"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "真实衣橱与每日穿搭"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "艺起搭"
+    },
+    {
+      "name": "today_form_name",
+      "value": "今日穿搭"
+    },
+    {
+      "name": "today_form_description",
+      "value": "查看已选穿搭与单品，点击或摇一摇展开搭配"
+    }
+  ]
+}

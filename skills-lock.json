@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "harmonyos-dev": {
+      "source": "coreylyn/harmonyos-skills",
+      "sourceType": "github",
+      "skillPath": "skills/harmonyos-dev/SKILL.md",
+      "computedHash": "188c4b761ec07896851fb976f28ec7e5d9cc1a75f5ab887c5fc7251f02bf8ebe"
+    }
+  }
+}

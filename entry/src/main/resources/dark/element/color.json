@@ -1,0 +1,41 @@
+{
+  "color": [
+    {
+      "name": "start_window_background",
+      "value": "#000000"
+    },
+    { "name": "page_background", "value": "#171315" },
+    { "name": "home_rose", "value": "#32242D" },
+    { "name": "home_blue", "value": "#222D38" },
+    { "name": "home_mint", "value": "#24332F" },
+    { "name": "home_yellow", "value": "#3B3426" },
+    { "name": "home_blue_ink", "value": "#A2C0DF" },
+    { "name": "home_mint_ink", "value": "#9CCEB8" },
+    { "name": "home_yellow_ink", "value": "#DFC58F" },
+    { "name": "surface", "value": "#231D20" },
+    { "name": "surface_soft", "value": "#2E262A" },
+    { "name": "surface_sunken", "value": "#1C1719" },
+    { "name": "text_primary", "value": "#F7F1F3" },
+    { "name": "text_secondary", "value": "#C0B2B7" },
+    { "name": "text_tertiary", "value": "#96878C" },
+    { "name": "divider", "value": "#3A3034" },
+
+    { "name": "accent", "value": "#E79AAC" },
+    { "name": "accent_soft", "value": "#3A282E" },
+    { "name": "accent_pressed", "value": "#F0B0BF" },
+    { "name": "accent_ink", "value": "#2B1419" },
+
+    { "name": "hero_from", "value": "#3A2A2F" },
+    { "name": "hero_to", "value": "#332C2A" },
+
+    { "name": "highlight", "value": "#F0A3B4" },
+    { "name": "highlight_soft", "value": "#3C2A2F" },
+
+    { "name": "success", "value": "#9CC4A9" },
+    { "name": "success_soft", "value": "#26302A" },
+    { "name": "warning", "value": "#E79B8A" },
+    { "name": "warning_soft", "value": "#3A2A26" },
+    { "name": "image_placeholder", "value": "#2A2326" },
+    { "name": "shadow", "value": "#40000000" }
+  ]
+}

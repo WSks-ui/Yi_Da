@@ -1,0 +1,10 @@
+# 统一换行：源码与文本用 LF 入库，避免 Windows 上 core.autocrlf 把整个仓库写成 CRLF。
+# 二进制资源不做转换。
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.so binary
+*.hap binary
+*.zip binary

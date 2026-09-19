@@ -1,0 +1,13 @@
+{
+  "app": {
+    "bundleName": "com.chr.Yi_Da",
+    "vendor": "example",
+    "versionCode": 1000000,
+    "versionName": "1.0.0",
+    "buildVersion": "1",
+    "icon": "$media:layered_image",
+    "label": "$string:app_name",
+    // 字号跟随系统「字体与显示大小」设置，上限 1.75 倍，避免超大字号撑破卡片。
+    "configuration": "$profile:configuration"
+  }
+}
