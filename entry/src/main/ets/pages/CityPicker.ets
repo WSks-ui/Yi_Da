@@ -109,7 +109,7 @@ export struct CityPickerSheet {
             Text(`${this.temperature}℃`).fontSize(Type.title).fontWeight(FontWeight.Bold)
               .fontColor(Theme.accent).maxLines(1)
           }.width('100%')
-          Slider({ value: this.temperature, min: 5, max: 35, step: 1 })
+          Slider({ value: this.temperature, min: -20, max: 45, step: 1 })
             .selectedColor(Theme.accent)
             .onChange((value: number) => this.temperature = Math.round(value))
             .accessibilityText('今天温度')

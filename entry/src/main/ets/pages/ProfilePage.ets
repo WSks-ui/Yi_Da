@@ -3,10 +3,11 @@
 // 设计原则：会员权益只描述真实存在的状态，不做促销式催促；身材与色彩信息全部可选，
 // 不填写也不影响衣橱与推荐；任何一项都能单独修改或删除。
 import { Theme, Type } from '../components/Theme';
-import { MaterialCard, SectionHeader, SectionHeaderLink, MaterialSupport, hdsMaterialReport } from '../components/MaterialKit';
+import { MaterialCard, SectionHeader, SectionHeaderLink } from '../components/MaterialKit';
 import { findDemoScene, formatTryOnDate } from '../service/TryOnDemo';
 import { BodyProfile, Completeness, Membership, TryOnTask, completeness, trialDaysLeft }
   from '../model/Wardrobe';
+import { analyzeBodyProfile } from '../service/BodyAnalysis';
 
 @Component
 export struct ProfilePage {  @Prop membership: Membership = { startDate: '', trialDays: 0, tryOnUsed: 0 };
@@ -22,6 +23,7 @@ export struct ProfilePage {  @Prop membership: Membership = { startDate: '', tri
   onClaimTrial: () => void = () => {};
   onOpenTryOn: (sceneId?: string) => void = () => {};
   onOpenCardManager: () => void = () => {};
+  onOpenTransfer: () => void = () => {};
   onReset: () => void = () => {};
 
   private tryOnLabel(task: TryOnTask): string {
@@ -120,10 +122,10 @@ export struct ProfilePage {  @Prop membership: Membership = { startDate: '', tri
             SymbolGlyph($r('sys.symbol.shirt')).fontSize(Theme.iconMd).fontColor([Theme.accent])
             Column({ space: Theme.spaceXs }) {
               Text('身材与色彩档案').fontSize(Type.cardTitle).fontColor(Theme.text).maxLines(1)
-              Text(this.body.height.length > 0
-                ? `身高 ${this.body.height} · 常穿 ${this.body.size.length > 0 ? this.body.size : '未填'}`
+              Text(analyzeBodyProfile(this.body).knownFields.length > 0
+                ? analyzeBodyProfile(this.body).summary
                 : '全部可选填，不影响衣橱与推荐')
-                .fontSize(Type.caption).fontColor(Theme.secondary).maxLines(2)
+                .fontSize(Type.caption).fontColor(Theme.secondary).maxLines(3)
             }.alignItems(HorizontalAlign.Start).layoutWeight(1)
             Button('编辑', { type: ButtonType.Normal })
               .fontSize(Type.buttonSmall).height(Theme.buttonCompact).borderRadius(Theme.radiusPill)
@@ -131,6 +133,22 @@ export struct ProfilePage {  @Prop membership: Membership = { startDate: '', tri
               .stateStyles({ pressed: { .opacity(Theme.pressedOpacity) } })
               .onClick(() => this.onOpenBody())
           }.width('100%')
+        }.width('100%')
+      }
+
+      MaterialCard({ contentPadding: Theme.spaceL }) {
+        Row({ space: Theme.spaceM }) {
+          SymbolGlyph($r('sys.symbol.arrow_down_circle')).fontSize(Theme.iconMd).fontColor([Theme.accent])
+          Column({ space: Theme.spaceXs }) {
+            Text('离线迁移').fontSize(Type.cardTitle).fontColor(Theme.text).maxLines(1)
+            Text('通过文件在手机和平板间手动迁移衣橱')
+              .fontSize(Type.caption).fontColor(Theme.secondary).maxLines(2)
+          }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+          Button('打开', { type: ButtonType.Normal })
+            .fontSize(Type.buttonSmall).height(Theme.buttonCompact).borderRadius(Theme.radiusPill)
+            .backgroundColor(Theme.accentSoft).fontColor(Theme.accent)
+            .stateStyles({ pressed: { .opacity(Theme.pressedOpacity) } })
+            .onClick(() => this.onOpenTransfer())
         }.width('100%')
       }
 
@@ -179,10 +197,6 @@ export struct ProfilePage {  @Prop membership: Membership = { startDate: '', tri
         }, (task: TryOnTask) => task.id)
       }
 
-      Text(hdsMaterialReport())
-        .fontSize(Type.caption).fontColor(MaterialSupport.isSupported() ? Theme.accent : Theme.secondary)
-        .lineHeight(22).width('100%').padding(Theme.spaceM)
-        .backgroundColor(Theme.accentSoft).borderRadius(Theme.radiusCard)
       Text('衣物与偏好保存在本机；没有上传人像、云端试穿或会员扣费。身体信息仅用于改善版型和配色建议。')
         .fontSize(Type.caption).fontColor(Theme.secondary).lineHeight(22).width('100%')
         .padding(Theme.spaceM).backgroundColor(Theme.surfaceSoft).borderRadius(Theme.radiusCard)
@@ -202,11 +216,13 @@ export struct ProfilePage {  @Prop membership: Membership = { startDate: '', tri
 // 分开，色彩档案用色卡选择。每一项都可以留空，页面底部明确说明不填也能正常使用。
 @Component
 export struct BodyProfileSheet {
-  @Link body: BodyProfile;
-  onSave: () => void = () => {};
+  @Prop body: BodyProfile;
+  onSave: (draft: BodyProfile) => Promise<void> = () => Promise.reject(new Error('保存暂不可用'));
 
   @State draft: BodyProfile = { height: '', size: '', fitPreference: '', shoulder: '', chest: '', waist: '',
     hip: '', skinTone: '', hairColor: '', eyeColor: '', updatedAt: '' };
+  @State saving: boolean = false;
+  @State saveError: string = '';
 
   private sizes: string[] = ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
   private fits: string[] = ['宽松', '标准', '合身'];
@@ -218,6 +234,26 @@ export struct BodyProfileSheet {
       shoulder: this.body.shoulder, chest: this.body.chest, waist: this.body.waist, hip: this.body.hip,
       skinTone: this.body.skinTone, hairColor: this.body.hairColor, eyeColor: this.body.eyeColor,
       updatedAt: this.body.updatedAt };
+  }
+
+  private async saveDraft(): Promise<void> {
+    if (this.saving) { return; }
+    this.saving = true;
+    this.saveError = '';
+    // 弹层只持有草稿。父页面会先写候选快照，成功后才更新 @State body；
+    // 失败时保留这里的输入，便于用户检查空间并原样重试。
+    const candidate: BodyProfile = { height: this.draft.height, size: this.draft.size,
+      fitPreference: this.draft.fitPreference, shoulder: this.draft.shoulder,
+      chest: this.draft.chest, waist: this.draft.waist, hip: this.draft.hip,
+      skinTone: this.draft.skinTone, hairColor: this.draft.hairColor,
+      eyeColor: this.draft.eyeColor, updatedAt: new Date().toLocaleDateString() };
+    try {
+      await this.onSave(candidate);
+    } catch (error) {
+      this.saveError = (error as Error).message || '保存失败，请重试';
+    } finally {
+      this.saving = false;
+    }
   }
 
   @Builder
@@ -291,15 +327,16 @@ export struct BodyProfileSheet {
           .fontSize(Type.caption).fontColor(Theme.secondary).lineHeight(22).width('100%')
           .padding(Theme.spaceM).backgroundColor(Theme.surfaceSoft).borderRadius(Theme.radiusCard)
 
-        Button('保存档案', { type: ButtonType.Normal }).width('100%').height(Theme.buttonHeight)
+        if (this.saveError.length > 0) {
+          Text(this.saveError).fontSize(Type.caption).fontColor(Theme.warning).width('100%').maxLines(3)
+        }
+        Button(this.saving ? '保存中' : '保存档案', { type: ButtonType.Normal })
+          .width('100%').height(Theme.buttonHeight)
           .borderRadius(Theme.radiusPill).backgroundColor(Theme.accent).fontColor(Color.White)
           .fontSize(Type.button)
           .stateStyles({ pressed: { .opacity(Theme.pressedOpacity) } })
-          .onClick(() => {
-            this.draft.updatedAt = new Date().toLocaleDateString();
-            this.body = this.draft;
-            this.onSave();
-          })
+          .enabled(!this.saving)
+          .onClick(() => this.saveDraft())
       }.width('100%').padding({ left: Theme.spaceXl, right: Theme.spaceXl, top: Theme.spaceXl, bottom: Theme.spaceXxl })
     }.width('100%').align(Alignment.TopStart).backgroundColor(Theme.background)
   }

@@ -10,6 +10,27 @@ export interface TryOnDemoScene {
   description: string;
 }
 
+export type TryOnDemoPoseId = 'front' | 'side' | 'back';
+
+// 这里只描述演示所需的姿势槽位；正侧背素材未齐时，UI 必须明确显示不可用，
+// 不得拿其他人物或其他服装的照片填充槽位。
+export interface TryOnDemoPose {
+  id: TryOnDemoPoseId;
+  label: string;
+}
+
+export const DEMO_POSES: TryOnDemoPose[] = [
+  { id: 'front', label: '正面' },
+  { id: 'side', label: '侧面' },
+  { id: 'back', label: '背面' }
+];
+
+export interface TryOnDemoGeneration {
+  sceneId: string;
+  poseId: TryOnDemoPoseId;
+  status: 'preset-demo';
+}
+
 export const DEMO_SCENES: TryOnDemoScene[] = [
   { id: 'denim_skirt', name: '牛仔半裙', garmentLabel: '牛仔半裙', pose: '正面站姿',
     description: '固定演示样片，不代表你的衣橱单品' },
@@ -40,6 +61,23 @@ export function formatTryOnDate(value: string): string {
 
 export function findDemoScene(id: string): TryOnDemoScene | undefined {
   return DEMO_SCENES.find((scene: TryOnDemoScene) => scene.id === id);
+}
+
+function waitForDemo(milliseconds: number): Promise<void> {
+  return new Promise<void>((resolve: () => void) => {
+    setTimeout(() => { resolve(); }, milliseconds);
+  });
+}
+
+// 只模拟提交与等待的交互，不运行模型、不发网络请求；返回结果仍是已打包的正面样片。
+// 注入 wait 供业务检查即时验证状态契约，不必等待完整演示时长。
+export async function simulateTryOnDemo(
+  sceneId: string,
+  wait: (milliseconds: number) => Promise<void> = waitForDemo
+): Promise<TryOnDemoGeneration> {
+  const scene: TryOnDemoScene = requireDemoScene(sceneId);
+  await wait(900);
+  return { sceneId: scene.id, poseId: 'front', status: 'preset-demo' };
 }
 
 function requireDemoScene(sceneId: string): TryOnDemoScene {

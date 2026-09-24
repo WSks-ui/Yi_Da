@@ -65,10 +65,20 @@ interface LocationLike {
   longitude: number;
 }
 
+interface ResolvedLocation {
+  location: LocationLike;
+  fromDevice: boolean;
+}
+
 interface GeoModuleLike {
   isLocationEnabled(): boolean;
   getCurrentLocation(request: LocationRequestLike): Promise<LocationLike>;
+  LocationRequestPriority: LocationPriorityLike;
+  LocationRequestScenario: LocationScenarioLike;
 }
+
+interface LocationPriorityLike { LOW_POWER: number; }
+interface LocationScenarioLike { DAILY_LIFE_SERVICE: number; }
 
 interface LocationRequestLike {
   priority: number;
@@ -84,6 +94,11 @@ export class WeatherService {
 
   static setManualCity(city: CityOption): void {
     WeatherService.manualCity = city;
+    WeatherService.lastResult = undefined;
+  }
+
+  static clearManualCity(): void {
+    WeatherService.manualCity = undefined;
     WeatherService.lastResult = undefined;
   }
 
@@ -121,48 +136,56 @@ export class WeatherService {
     return WeatherService.geoModule;
   }
 
-  // 取当前坐标：先试定位，失败后用手动城市。两者都没有则返回 undefined。
-  private static async resolveLocation(): Promise<LocationLike | undefined> {
-    const geo: GeoModuleLike | null = await WeatherService.geo();
+  // 坐标与来源必须一同返回。定位失败后可以继续使用手动城市，
+  // 但这种回退不能在界面上被写成“当前位置”。
+  private static async resolveLocation(useDeviceLocation: boolean): Promise<ResolvedLocation | undefined> {
+    // 冷启动仅用用户已选城市，不主动申请或读取设备坐标；定位按钮获授权后才进入这一支。
+    const geo: GeoModuleLike | null = useDeviceLocation ? await WeatherService.geo() : null;
     if (geo !== null) {
       try {
         if (geo.isLocationEnabled()) {
-          // 枚举值取自 Location Kit：FIRST_FIX=1，DAILY_LIFE_SERVICE=0。
+          // 使用 Kit 实际导出的枚举；本机 API 26 的枚举不是从 0 连续编号，
+          // 写死 1/0 虽能通过结构类型编译，却会在设备请求时传入无效参数。
           const location: LocationLike = await geo.getCurrentLocation({
-            priority: 1, scenario: 0, timeoutMs: 3000
+            priority: geo.LocationRequestPriority.LOW_POWER,
+            scenario: geo.LocationRequestScenario.DAILY_LIFE_SERVICE,
+            timeoutMs: 3000
           });
-          return { latitude: location.latitude, longitude: location.longitude };
+          if (Number.isFinite(location.latitude) && Number.isFinite(location.longitude)) {
+            return { location: { latitude: location.latitude, longitude: location.longitude }, fromDevice: true };
+          }
         }
       } catch (error) {
         hilog.info(DOMAIN, TAG, 'location read failed, falling back to manual city');
       }
     }
     if (WeatherService.manualCity !== undefined) {
-      return { latitude: WeatherService.manualCity.latitude, longitude: WeatherService.manualCity.longitude };
+      return { location: { latitude: WeatherService.manualCity.latitude,
+        longitude: WeatherService.manualCity.longitude }, fromDevice: false };
     }
     return undefined;
   }
 
   // 拉取真实天气。任何失败都返回 available=false，由界面给出"手动温度"的说明。
-  static async refresh(context: common.Context): Promise<WeatherSnapshot> {
+  static async refresh(context: common.Context, useDeviceLocation: boolean = false): Promise<WeatherSnapshot> {
     const fallback: WeatherSnapshot = { available: false, city: WeatherService.manualCityName(),
       condition: '', tempMin: 0, tempMax: 0, source: '手动温度' };
     const kit: WeatherModuleLike | null = await WeatherService.weather();
     if (kit === null) {
-      fallback.source = '本机无天气服务，使用手动温度';
+      fallback.source = '天气暂不可用，使用手动温度';
       return fallback;
     }
-    const location: LocationLike | undefined = await WeatherService.resolveLocation();
-    if (location === undefined) { return fallback; }
+    const resolved: ResolvedLocation | undefined = await WeatherService.resolveLocation(useDeviceLocation);
+    if (resolved === undefined) { return fallback; }
     try {
       const weather: WeatherLike = await kit.getWeatherWithContext(context, {
-        location: location,
+        location: resolved.location,
         limitedDatasets: [kit.Dataset.CURRENT, kit.Dataset.DAILY]
       });
       const current: CurrentLike | undefined = weather.current;
       const daily: ForecastLike | undefined = weather.daily;
-      let tempMin: number = 0;
-      let tempMax: number = 0;
+      let tempMin: number = Number.NaN;
+      let tempMax: number = Number.NaN;
       // Forecast 把多日数据放在 forecast 数组里，不能直接当数组用。
       const days: DailyLike[] = daily !== undefined ? daily.forecast : [];
       if (days.length > 0) {
@@ -173,11 +196,15 @@ export class WeatherService {
         tempMin = Math.round(current.temperature);
         tempMax = tempMin;
       }
+      if (!Number.isFinite(tempMin) || !Number.isFinite(tempMax) || tempMin > tempMax) {
+        fallback.source = '天气数据异常，使用手动温度';
+        return fallback;
+      }
       const snapshot: WeatherSnapshot = {
         available: true,
-        city: WeatherService.manualCityName(),
+        city: resolved.fromDevice ? '当前位置' : WeatherService.manualCityName(),
         // 天气现象文案由系统给出，不自行映射天气码，避免映射表过期后显示错误。
-        condition: current !== undefined ? current.condition.description : '',
+        condition: current !== undefined && current.condition !== undefined ? current.condition.description : '',
         tempMin: tempMin, tempMax: tempMax,
         source: '来自系统天气服务'
       };

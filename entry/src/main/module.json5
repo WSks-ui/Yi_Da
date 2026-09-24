@@ -5,7 +5,20 @@
     "description": "$string:module_desc",
     "mainElement": "EntryAbility",
     "deviceTypes": [
-      "phone"
+      "phone",
+      "tablet"
+    ],
+    // 天气链路在运行时按需读取定位；权限只在用户主动刷新真实天气时使用。
+    // 模拟器没有对应能力时 WeatherService 会回退到手动城市与温度，不影响离线衣橱。
+    "requestPermissions": [
+      {
+        "name": "ohos.permission.APPROXIMATELY_LOCATION",
+        "reason": "$string:location_permission_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "inuse"
+        }
+      }
     ],
     "deliveryWithInstall": true,
     "installationFree": false,

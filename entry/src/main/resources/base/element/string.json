@@ -19,6 +19,10 @@
     {
       "name": "today_form_description",
       "value": "查看已选穿搭与单品，点击或摇一摇展开搭配"
+    },
+    {
+      "name": "location_permission_reason",
+      "value": "用于用户主动刷新所在城市的实时天气与穿搭建议"
     }
   ]
 }

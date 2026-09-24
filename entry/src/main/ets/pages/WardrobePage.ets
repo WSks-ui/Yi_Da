@@ -41,7 +41,8 @@ export struct WardrobePage {
     return this.garments.filter((item: Garment) =>
       (this.filterCategory === '全部' || item.category === this.filterCategory) &&
       (this.filterStatus === '全部状态' || item.status === this.filterStatus) &&
-      (keyword.length === 0 || item.name.indexOf(keyword) >= 0 || item.color.indexOf(keyword) >= 0));
+      (keyword.length === 0 || item.name.indexOf(keyword) >= 0 || item.color.indexOf(keyword) >= 0 ||
+        (item.subcategory || '').indexOf(keyword) >= 0 || (item.material || '').indexOf(keyword) >= 0));
   }
 
   @Builder
@@ -214,7 +215,7 @@ export struct WardrobePage {
       Text(item.name).fontSize(Type.caption).fontWeight(FontWeight.Medium).fontColor(Theme.text)
         .maxLines(this.compact ? 1 : 2).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
       if (!this.compact) {
-        Text(item.category + ' · ' + item.wearCount + ' 次')
+        Text((item.subcategory || item.category) + ' · ' + item.wearCount + ' 次')
           .fontSize(Type.caption).fontColor(Theme.tertiary).maxLines(1).width('100%')
       }
     }

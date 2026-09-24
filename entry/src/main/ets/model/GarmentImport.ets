@@ -29,6 +29,8 @@ export interface ImportGarmentDraft {
   name: string;
   // -1 表示尚未确认品类。选图后不猜品类，用户必须自己选一次。
   categoryIndex: number;
+  subcategory?: string;
+  material?: string;
   // 空字符串表示"未设置"颜色，不替用户声称自动识别出了颜色。
   color: string;
   minTemp: number;
@@ -43,7 +45,7 @@ export interface ImportItem {
   // 任务 ID 与衣物 ID 在选图时一次性生成，重试不重建，保证幂等。
   id: string;
   garmentId: string;
-  // Picker 返回的相册 URI，只在本次会话内使用，绝不写进衣橱快照。
+  // Picker 的相册 URI 或白名单示例照片标识，只在本次会话内使用，绝不写进衣橱快照。
   sourceUri: string;
   // 归本次任务拥有的沙箱原图。
   originalUri: string;
@@ -67,7 +69,8 @@ export interface ImportSummary {
 }
 
 export function emptyImportDraft(): ImportGarmentDraft {
-  return { name: '', categoryIndex: -1, color: '', minTemp: 12, maxTemp: 30, temperatureEdited: false,
+  return { name: '', categoryIndex: -1, subcategory: '', material: '', color: '',
+    minTemp: 12, maxTemp: 30, temperatureEdited: false,
     occasions: [], error: '' };
 }
 

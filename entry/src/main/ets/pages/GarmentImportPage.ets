@@ -12,6 +12,8 @@ import { ImportFailureStep, ImportItem, ImportPhase, ImportSummary } from '../mo
 import { activeImageUri, canSave, cutoutLabel, draftErrors, DraftErrors, hasUnfinished, IMPORT_SELECT_LIMIT,
   isActivePhase, remainingCapacity, summaryOf, WARDROBE_LIMIT } from '../service/GarmentImport';
 import { cutoutSupported } from '../service/GarmentCutout';
+import { GARMENT_CATEGORIES } from '../service/GarmentRecognition';
+import { BUNDLED_GARMENT_PHOTOS, BundledGarmentPhoto } from '../service/BundledGarmentPhotos';
 import { Theme, Type } from '../components/Theme';
 
 const COLORS: string[] = ['白色', '黑色', '灰色', '蓝色', '绿色', '棕色', '多色'];
@@ -24,7 +26,13 @@ export struct GarmentImportPage {
   @Prop garmentCount: number = 0;
   @Prop readBlocked: boolean = false;
   @Prop busy: boolean = false;
+  @Prop recognitionMessage: string = '';
+  @Prop recognitionColor: string = '';
+  @Prop recognitionBusy: boolean = false;
   onPick: () => void = () => {};
+  onSample: (id: string) => void = () => {};
+  onRecognize: (index: number) => void = () => {};
+  onUseRecognition: (index: number) => void = () => {};
   onSelect: (index: number) => void = () => {};
   onMove: (index: number) => void = () => {};
   onConfirm: (index: number) => void = () => {};
@@ -34,6 +42,8 @@ export struct GarmentImportPage {
   onOriginal: (index: number) => void = () => {};
   onName: (index: number, value: string) => void = () => {};
   onCategory: (index: number, categoryIndex: number) => void = () => {};
+  onSubcategory: (index: number, value: string) => void = () => {};
+  onMaterial: (index: number, value: string) => void = () => {};
   onColor: (index: number, value: string) => void = () => {};
   onMinTemp: (index: number, value: number) => void = () => {};
   onMaxTemp: (index: number, value: number) => void = () => {};
@@ -43,6 +53,7 @@ export struct GarmentImportPage {
   // 滑杆的拖动过程需要本地值，否则受控组件会边拖边被回写、手感发滞。
   @State sliderMin: number = 12;
   @State sliderMax: number = 30;
+  @State fineQuery: string = '';
 
   // 记录上一次把哪一个任务/品类同步进滑杆。父页面每次异步状态更新都会发布新数组，
   // 但拖动滑杆时本地值要继续跟手，不能因为同一任务的普通 phase/image 更新被重置。
@@ -73,6 +84,7 @@ export struct GarmentImportPage {
     if (!item) { return; }
     this.sliderMin = item.draft.minTemp;
     this.sliderMax = Math.max(item.draft.minTemp, item.draft.maxTemp);
+    this.fineQuery = item.draft.subcategory || '';
     this.syncedTaskId = item.id;
     this.syncedCategoryIndex = item.draft.categoryIndex;
   }
@@ -83,7 +95,9 @@ export struct GarmentImportPage {
     return this.items[index];
   }
 
-  private capacity(): number { return remainingCapacity(this.garmentCount); }
+  private capacity(): number {
+    return Math.max(0, Math.min(remainingCapacity(this.garmentCount), IMPORT_SELECT_LIMIT - this.items.length));
+  }
   private savedSummary(): ImportSummary { return summaryOf(this.items); }
   private allHandled(): boolean { return this.items.length > 0 && !hasUnfinished(this.items); }
 
@@ -153,6 +167,22 @@ export struct GarmentImportPage {
   private currentColor(): string {
     const item: ImportItem | undefined = this.current();
     return item ? item.draft.color : '';
+  }
+
+  private currentSubcategory(): string {
+    const item: ImportItem | undefined = this.current();
+    return item ? item.draft.subcategory || '' : '';
+  }
+
+  private currentMaterial(): string {
+    const item: ImportItem | undefined = this.current();
+    return item ? item.draft.material || '' : '';
+  }
+
+  private fineMatches(): string[] {
+    const query: string = this.fineQuery.trim();
+    if (query.length === 0) { return []; }
+    return GARMENT_CATEGORIES.filter((value: string) => value.indexOf(query) >= 0).slice(0, 8);
   }
 
   private currentMinTemp(): number {
@@ -237,7 +267,10 @@ export struct GarmentImportPage {
 
   private remainingHint(): string {
     const capacity: number = this.capacity();
-    if (capacity <= 0) { return `衣橱已满 ${WARDROBE_LIMIT} 件，可先整理再继续录入。`; }
+    if (this.garmentCount >= WARDROBE_LIMIT) {
+      return `衣橱已满 ${WARDROBE_LIMIT} 件，可先整理再继续录入。`;
+    }
+    if (capacity <= 0) { return `本次已选满 ${IMPORT_SELECT_LIMIT} 张，完成后可再次录入。`; }
     return `衣橱还可以再放 ${capacity} 件。`;
   }
 
@@ -277,10 +310,10 @@ export struct GarmentImportPage {
   private emptyState() {
     Column({ space: Theme.spaceM }) {
       SymbolGlyph($r('sys.symbol.camera')).fontSize(Theme.iconLg).fontColor([Theme.tertiary])
-      Text('从相册选择衣物照片').fontSize(Type.bodySmall).fontColor(Theme.text)
+      Text('选择衣物照片').fontSize(Type.bodySmall).fontColor(Theme.text)
         .maxLines(2).textAlign(TextAlign.Center)
       Text(this.capacity() > 0
-        ? `可一次选择多张，逐件确认后再保存。本次最多可选 ${this.capacity()} 张。`
+        ? `本次还可加入 ${this.capacity()} 张`
         : `衣橱已满 ${WARDROBE_LIMIT} 件，请先整理衣橱再添加。`)
         .fontSize(Type.caption).fontColor(Theme.secondary).maxLines(3).textAlign(TextAlign.Center)
       Button('从相册选择', { type: ButtonType.Normal }).width('100%').height(Theme.buttonHeight)
@@ -289,8 +322,32 @@ export struct GarmentImportPage {
         .enabled(!this.readBlocked && !this.busy && this.capacity() > 0)
         .stateStyles({ pressed: { .opacity(Theme.pressedOpacity) } })
         .onClick(() => this.onPick())
+      if (this.capacity() > 0) {
+        Text('示例照片').fontSize(Type.caption).fontColor(Theme.secondary).width('100%')
+        this.bundledPhotos()
+      }
     }
       .width('100%').padding(Theme.spaceXl).justifyContent(FlexAlign.Center)
+  }
+
+  // 示例素材与系统相册共用同一条导入会话；这里只呈现可选资源，不预造已保存衣物。
+  @Builder
+  private bundledPhotos() {
+    Row({ space: Theme.spaceS }) {
+      ForEach(BUNDLED_GARMENT_PHOTOS, (photo: BundledGarmentPhoto) => {
+        Column({ space: Theme.spaceXs }) {
+          Image(photo.resource).width('100%').height(92).objectFit(ImageFit.Cover)
+          Text(photo.label).fontSize(Type.caption).fontColor(Theme.text).maxLines(1)
+            .textAlign(TextAlign.Center).width('100%')
+        }
+          .layoutWeight(1).padding({ bottom: Theme.spaceS })
+          .backgroundColor(Theme.surfaceSoft).borderRadius(Theme.radiusInput).clip(true)
+          .enabled(this.canAddMore())
+          .stateStyles({ pressed: { .opacity(Theme.pressedOpacity) } })
+          .accessibilityText('选择示例照片，' + photo.label)
+          .onClick(() => this.onSample(photo.id))
+      }, (photo: BundledGarmentPhoto) => photo.id)
+    }.width('100%')
   }
 
   @Builder
@@ -357,7 +414,7 @@ export struct GarmentImportPage {
           .onClick(() => this.onCutout(this.currentIndex))
       }.width('100%')
       if (!cutoutSupported()) {
-        Text('当前设备不提供主体抠图，保存时使用原图。').fontSize(Type.caption)
+        Text('暂时无法抠图，仍可使用原图保存。').fontSize(Type.caption)
           .fontColor(Theme.tertiary).width('100%').maxLines(2)
       }
     }.width('100%')
@@ -442,7 +499,71 @@ export struct GarmentImportPage {
       }.width('100%')
 
       Column({ space: Theme.spaceXs }) {
-        this.fieldLabel('颜色', '')
+        Text('细类（可选）').fontSize(Type.bodySmall).fontColor(Theme.text).width('100%')
+        TextInput({ text: this.fineQuery, placeholder: '搜索细类，例如 连帽衫' }).maxLength(24)
+          .fontColor(Theme.text).placeholderColor(Theme.tertiary)
+          .backgroundColor(Theme.surfaceSoft).borderRadius(Theme.radiusInput)
+          .enabled(this.currentCanEdit())
+          .onChange((value: string) => this.fineQuery = value)
+        if (this.currentSubcategory().length > 0) {
+          Text('已选：' + this.currentSubcategory()).fontSize(Type.caption)
+            .fontColor(Theme.accent).width('100%').maxLines(1)
+        }
+        Flex({ wrap: FlexWrap.Wrap }) {
+          ForEach(this.fineMatches(), (value: string) => {
+            Text(value).fontSize(Type.caption).fontColor(Theme.text)
+              .padding({ left: Theme.spaceM, right: Theme.spaceM, top: Theme.spaceS, bottom: Theme.spaceS })
+              .backgroundColor(Theme.surfaceSoft).borderRadius(Theme.radiusInput)
+              .margin({ right: Theme.spaceS, bottom: Theme.spaceS })
+              .enabled(this.currentCanEdit())
+              .onClick(() => {
+                this.onSubcategory(this.currentIndex, value);
+                this.fineQuery = value;
+              })
+          }, (value: string) => value)
+          if (this.currentSubcategory().length > 0) {
+            Button('清除细类', { type: ButtonType.Normal }).fontSize(Type.buttonSmall)
+              .backgroundColor(Theme.surfaceSoft).fontColor(Theme.secondary)
+              .enabled(this.currentCanEdit())
+              .onClick(() => {
+                this.onSubcategory(this.currentIndex, '');
+                this.fineQuery = '';
+              })
+          }
+        }.width('100%')
+      }.width('100%')
+
+      Column({ space: Theme.spaceXs }) {
+        Text('材质（可选，按衣物标签填写）').fontSize(Type.bodySmall).fontColor(Theme.text).width('100%')
+        TextInput({ text: this.currentMaterial(), placeholder: '例如 棉、羊毛、聚酯纤维' }).maxLength(24)
+          .fontColor(Theme.text).placeholderColor(Theme.tertiary)
+          .backgroundColor(Theme.surfaceSoft).borderRadius(Theme.radiusInput)
+          .enabled(this.currentCanEdit())
+          .onChange((value: string) => this.onMaterial(this.currentIndex, value))
+      }.width('100%')
+
+      Column({ space: Theme.spaceXs }) {
+        Row({ space: Theme.spaceS }) {
+          Text('颜色').fontSize(Type.bodySmall).fontColor(Theme.text).layoutWeight(1).maxLines(1)
+          Button(this.recognitionBusy ? '分析中' : '分析图片主色', { type: ButtonType.Normal })
+            .height(32).fontSize(Type.buttonSmall).borderRadius(Theme.radiusInput)
+            .backgroundColor(Theme.accentSoft).fontColor(Theme.accent)
+            .enabled(this.currentCanEdit() && this.currentOriginalUri().length > 0 && !this.recognitionBusy)
+            .stateStyles({ pressed: { .opacity(Theme.pressedOpacity) } })
+            .onClick(() => this.onRecognize(this.currentIndex))
+        }.width('100%')
+        if (this.recognitionMessage.length > 0) {
+          Row({ space: Theme.spaceS }) {
+            Text(this.recognitionMessage).fontSize(Type.caption).fontColor(Theme.secondary)
+              .layoutWeight(1).maxLines(3)
+            if (this.recognitionColor.length > 0 && this.currentColor() !== this.recognitionColor) {
+              Button('采用', { type: ButtonType.Normal }).height(32).fontSize(Type.buttonSmall)
+                .backgroundColor(Theme.accentSoft).fontColor(Theme.accent).borderRadius(Theme.radiusInput)
+                .enabled(this.currentCanEdit())
+                .onClick(() => this.onUseRecognition(this.currentIndex))
+            }
+          }.width('100%')
+        }
         Flex({ wrap: FlexWrap.Wrap }) {
           Text('未设置').fontSize(Type.caption)
             .fontColor(this.currentColor().length === 0 ? Theme.accent : Theme.text)
@@ -466,6 +587,13 @@ export struct GarmentImportPage {
               .stateStyles({ pressed: { .opacity(Theme.pressedOpacity) } })
               .onClick(() => { if (this.currentCanEdit()) { this.onColor(this.currentIndex, value); } })
           }, (value: string) => value)
+          if (this.currentColor().length > 0 && COLORS.indexOf(this.currentColor()) < 0) {
+            Text(this.currentColor()).fontSize(Type.caption).fontColor(Theme.accent)
+              .padding({ left: Theme.spaceL, right: Theme.spaceL, top: Theme.spaceS, bottom: Theme.spaceS })
+              .backgroundColor(Theme.accentSoft).borderRadius(Theme.radiusPill)
+              .border({ width: 1, color: Theme.accent })
+              .margin({ right: Theme.spaceS, bottom: Theme.spaceS })
+          }
         }.width('100%')
       }.width('100%')
 
@@ -633,6 +761,10 @@ export struct GarmentImportPage {
               .enabled(this.canAddMore())
               .stateStyles({ pressed: { .opacity(Theme.pressedOpacity) } })
               .onClick(() => this.onPick())
+            if (this.canAddMore()) {
+              Text('示例照片').fontSize(Type.caption).fontColor(Theme.secondary).width('100%')
+              this.bundledPhotos()
+            }
           }
             .width('100%').constraintSize({ maxWidth: CONTENT_MAX_WIDTH })
             .padding({ left: Theme.pagePadding, right: Theme.pagePadding,

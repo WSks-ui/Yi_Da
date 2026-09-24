@@ -113,7 +113,8 @@ export function patchDraft(items: ImportItem[], id: string, patch: (draft: Impor
 // 换品类：用户没动过温度时才套用该品类默认区间，动过就保留用户的选择。
 export function applyCategory(items: ImportItem[], id: string, categoryIndex: number): ImportItem[] {
   return patchDraft(items, id, (draft: ImportGarmentDraft) => {
-    const next: ImportGarmentDraft = { name: draft.name, categoryIndex: categoryIndex, color: draft.color,
+    const next: ImportGarmentDraft = { name: draft.name, categoryIndex: categoryIndex,
+      subcategory: '', material: draft.material, color: draft.color,
       minTemp: draft.minTemp, maxTemp: draft.maxTemp, temperatureEdited: draft.temperatureEdited,
       occasions: draft.occasions.slice(), error: draft.error };
     if (!draft.temperatureEdited && categoryIndex >= 0 && categoryIndex < CATEGORIES.length) {
@@ -127,13 +128,15 @@ export function applyCategory(items: ImportItem[], id: string, categoryIndex: nu
 // 用户拖动温度滑杆：从这一下起温度归用户所有，换品类不再覆盖。
 export function applyMinTemp(items: ImportItem[], id: string, value: number): ImportItem[] {
   return patchDraft(items, id, (draft: ImportGarmentDraft) => ({ name: draft.name,
-    categoryIndex: draft.categoryIndex, color: draft.color, minTemp: value, maxTemp: draft.maxTemp,
+    categoryIndex: draft.categoryIndex, subcategory: draft.subcategory, material: draft.material,
+    color: draft.color, minTemp: value, maxTemp: draft.maxTemp,
     temperatureEdited: true, occasions: draft.occasions.slice(), error: draft.error }));
 }
 
 export function applyMaxTemp(items: ImportItem[], id: string, value: number): ImportItem[] {
   return patchDraft(items, id, (draft: ImportGarmentDraft) => ({ name: draft.name,
-    categoryIndex: draft.categoryIndex, color: draft.color, minTemp: draft.minTemp, maxTemp: value,
+    categoryIndex: draft.categoryIndex, subcategory: draft.subcategory, material: draft.material,
+    color: draft.color, minTemp: draft.minTemp, maxTemp: value,
     temperatureEdited: true, occasions: draft.occasions.slice(), error: draft.error }));
 }
 
@@ -141,13 +144,18 @@ export function applyMaxTemp(items: ImportItem[], id: string, value: number): Im
 // 重建会把对象身份一起换掉，在 ArkUI V1 的复用节点里很容易写出"画面不动但数据已改"的问题。
 export interface ImportDraftPatch {
   name?: string;
+  subcategory?: string;
+  material?: string;
   color?: string;
   occasions?: string[];
 }
 
 export function applyDraft(items: ImportItem[], id: string, patch: ImportDraftPatch): ImportItem[] {
   return patchDraft(items, id, (draft: ImportGarmentDraft) => ({ name: patch.name !== undefined ? patch.name : draft.name,
-    categoryIndex: draft.categoryIndex, color: patch.color !== undefined ? patch.color : draft.color,
+    categoryIndex: draft.categoryIndex,
+    subcategory: patch.subcategory !== undefined ? patch.subcategory : draft.subcategory,
+    material: patch.material !== undefined ? patch.material : draft.material,
+    color: patch.color !== undefined ? patch.color : draft.color,
     minTemp: draft.minTemp, maxTemp: draft.maxTemp, temperatureEdited: draft.temperatureEdited,
     occasions: patch.occasions !== undefined ? patch.occasions.slice() : draft.occasions.slice(),
     error: draft.error }));
@@ -388,7 +396,7 @@ export function canSave(item: ImportItem, wardrobeCount: number): string {
   if (errors.category.length > 0) { return errors.category; }
   if (errors.temperature.length > 0) { return errors.temperature; }
   if (errors.occasions.length > 0) { return errors.occasions; }
-  if (wardrobeCount >= WARDROBE_LIMIT) { return `本地演示版最多保存 ${WARDROBE_LIMIT} 件衣物`; }
+  if (wardrobeCount >= WARDROBE_LIMIT) { return `衣橱最多保存 ${WARDROBE_LIMIT} 件衣物，请先整理再继续录入`; }
   return '';
 }
 
