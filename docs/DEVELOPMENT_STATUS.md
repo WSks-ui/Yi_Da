@@ -2,10 +2,10 @@
 
 ## 2026-09-24 端侧图像分析与实时天气备选链路
 
-- 新增 `mobilenetv2_openimage.ms`（MindSpore Model Zoo Open Images MobileNetV2，随包约 11 MB）和 `OnDeviceGarmentModel.ets`。用户点击“端侧分析衣物”后才加载模型，在设备本地对导入图片推理；模型只把少量通用标签映射到衣橱五大类，结果带“模型候选”提示并由用户确认。
-- 新增 `OpenImageClothing.ets` 的输入预处理、标签映射和保守阈值；非衣物、弱命中和尺寸错误均返回空结果，不伪造服装识别准确率。MindSpore Lite 官方接口支持从 buffer 加载模型、设置输入张量并执行 `predict`；本实现使用 CPU 目标，后续可按设备能力增加 NNRT provider。
+- 新增 `mobilenetv2.ms`（MindSpore Lite 官方 quick_start MobileNetV2，随包约 14 MB）和 `OnDeviceGarmentModel.ets`。用户点击“端侧分析衣物”后才加载模型，在设备本地对导入图片推理；模型只把少量通用标签映射到衣橱五大类，结果带“模型候选”提示并由用户确认。
+- 新增 `OpenImageClothing.ets` 的 ImageNet 输入预处理、标签映射和保守阈值；兼容 1000/1001 类输出，非衣物、弱命中和尺寸错误均返回空结果，不伪造服装识别准确率。MindSpore Lite 官方接口支持从 buffer 加载模型、设置输入张量并执行 `predict`；本实现使用 CPU 目标，后续可按设备能力增加 NNRT provider。
 - 华为天气 Kit 不可用时新增 Open-Meteo 备选预报：使用已选城市或用户主动授权的粗略坐标，返回当天最高/最低温与天气现象；网络失败仍退回手动温度，界面显示数据来源。每个 HTTP 请求在 `finally` 中销毁。
-- 验证：端侧标签/像素预处理检查 13/13，业务与页面接线检查 103/103，天气专项 4/4，API 26 HAP 构建成功。当前没有可用的 HDC 设备连接，因此模型首次加载、相册图片端侧推理、定位授权和真实网络天气仍需在 HarmonyOS 7 手机上验收。
+- 验证：端侧标签/像素预处理检查 13/13，业务与页面接线检查 103/103，天气专项 4/4，API 26 HAP 构建成功；HarmonyOS 7 API 26 模拟器已实际加载模型并完成推理，输出 1001 类、最大分数 38%，界面展示候选并保留人工确认。真实手机上的 NNRT 性能、定位授权和不同照片分布仍需单独验收。
 
 ## 2026-09-24 随包示例照片录入
 

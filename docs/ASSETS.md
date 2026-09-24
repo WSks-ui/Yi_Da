@@ -19,8 +19,8 @@
 
 ## 端侧模型
 
-`entry/src/main/resources/rawfile/mobilenetv2_openimage.ms` 来自 MindSpore Lite Model Zoo 的
-Open Images MobileNetV2 模型。模型文件用于端侧推理候选提示，不能直接证明专用服装分类准确率；
+`entry/src/main/resources/rawfile/mobilenetv2.ms` 来自 MindSpore Lite Model Zoo 的
+MobileNetV2 ImageNet 模型。模型文件用于端侧推理候选提示，不能直接证明专用服装分类准确率；
 应用只映射少量与衣橱大类相符的标签，并要求用户确认。MindSpore Model Zoo 代码与模型生态遵循
 Apache License 2.0，模型下载地址为：
-https://download.mindspore.cn/model_zoo/official/lite/mobilenetv2_openimage_lite/mobilenetv2.ms
+https://download.mindspore.cn/model_zoo/official/lite/quick_start/mobilenetv2.ms

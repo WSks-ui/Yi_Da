@@ -1010,8 +1010,14 @@ struct Index {
       const usable: boolean = result.colorSource === RECOGNITION_SOURCE_PIXEL_COLOR && result.color.length > 0;
       // 模型是通用多标签分类器，只给少数可映射到衣橱的品类候选；用户自行确认。
       const categoryIndex: number = candidate === undefined ? -1 : CATEGORIES.indexOf(candidate.category);
-      const message: string = recognitionSummary(result) + (candidate === undefined ? '' :
-        ` 端侧模型候选：${candidate.subcategory}（${candidate.label}，模型分 ${Math.round(candidate.score * 100)}%，请核对）。`);
+      let message: string = recognitionSummary(result);
+      if (candidate !== undefined) {
+        const candidateMessage: string =
+          `端侧模型候选：${candidate.subcategory}（${candidate.label}，模型分 ${Math.round(candidate.score * 100)}%，请核对）。`;
+        // 没有像素主色时，recognitionSummary 会返回“暂无建议”。此时已有
+        // 模型候选，应直接展示候选，避免用户同时看到互相矛盾的两句话。
+        message = message.indexOf('暂无可用建议') >= 0 ? candidateMessage : `${message} ${candidateMessage}`;
+      }
       const hint: ImportRecognitionHint = { taskId: taskId, originalUri: originalUri,
         color: usable ? result.color : '', categoryIndex: categoryIndex,
         subcategory: candidate === undefined ? '' : candidate.subcategory, message: message };

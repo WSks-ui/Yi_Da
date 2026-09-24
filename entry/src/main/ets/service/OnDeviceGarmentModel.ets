@@ -2,12 +2,13 @@ import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { image } from '@kit.ImageKit';
 import { mindSporeLite } from '@kit.MindSporeLiteKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ClothingCandidate, chooseClothingCandidate, normalizeOpenImagePixels } from './OpenImageClothing';
 
-const MODEL_FILE: string = 'mobilenetv2_openimage.ms';
+const MODEL_FILE: string = 'mobilenetv2.ms';
 
-// 仅在用户点“端侧分析”时加载约 11 MB 的官方模型。CPU 模式不依赖 NPU；
-// 模型是 Open Images 通用多标签分类器，不承诺 70 类服装或材质识别。
+// 仅在用户点“端侧分析”时加载约 14 MB 的官方模型。CPU 模式不依赖 NPU；
+// 模型是 ImageNet 通用分类器，不承诺专用服装或材质识别。
 export class OnDeviceGarmentModel {
   private modelPromise: Promise<mindSporeLite.Model> | undefined = undefined;
 
@@ -45,7 +46,15 @@ export class OnDeviceGarmentModel {
       inputs[0].setData(normalizeOpenImagePixels(new Uint8Array(raw)).buffer as ArrayBuffer);
       const outputs: mindSporeLite.MSTensor[] = await model.predict(inputs);
       if (outputs.length === 0) { return undefined; }
-      return chooseClothingCandidate(new Float32Array(outputs[0].getData()));
+      const scores: Float32Array = new Float32Array(outputs[0].getData());
+      let maximum: number = 0;
+      for (const score of scores) { if (Number.isFinite(score) && score > maximum) { maximum = score; } }
+      // hilog 的浮点占位符在部分 API 26 日志查看器中会原样显示，转成
+      // 万分比整数后既能保留调试价值，也不会影响用户界面。
+      const maximumX10000: number = Math.round(maximum * 10000);
+      hilog.info(0x1200, 'YiDaModel', 'model output elements=%{public}d max_x10000=%{public}d',
+        scores.length, maximumX10000);
+      return chooseClothingCandidate(scores);
     } finally {
       if (pixels !== undefined) { await pixels.release().catch(() => {}); }
       if (source !== undefined) { await source.release().catch(() => {}); }
