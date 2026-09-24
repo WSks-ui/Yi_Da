@@ -7,6 +7,7 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { common } from '@kit.AbilityKit';
 import { CityOption } from '../model/Wardrobe';
+import { fetchOpenMeteo, OpenMeteoReading } from './OpenMeteoWeather';
 
 const DOMAIN: number = 0x1200;
 const TAG: string = 'YiDaWeather';
@@ -166,17 +167,35 @@ export class WeatherService {
     return undefined;
   }
 
+  private static async publicForecast(resolved: ResolvedLocation, fallback: WeatherSnapshot): Promise<WeatherSnapshot> {
+    try {
+      const reading: OpenMeteoReading | undefined = await fetchOpenMeteo(
+        resolved.location.latitude, resolved.location.longitude);
+      if (reading === undefined) { return fallback; }
+      const snapshot: WeatherSnapshot = {
+        available: true,
+        city: resolved.fromDevice ? '当前位置' : WeatherService.manualCityName(),
+        condition: reading.condition,
+        tempMin: reading.min,
+        tempMax: reading.max,
+        source: 'Open-Meteo 预报'
+      };
+      WeatherService.lastResult = snapshot;
+      return snapshot;
+    } catch (_) { return fallback; }
+  }
+
   // 拉取真实天气。任何失败都返回 available=false，由界面给出"手动温度"的说明。
   static async refresh(context: common.Context, useDeviceLocation: boolean = false): Promise<WeatherSnapshot> {
     const fallback: WeatherSnapshot = { available: false, city: WeatherService.manualCityName(),
       condition: '', tempMin: 0, tempMax: 0, source: '手动温度' };
+    const resolved: ResolvedLocation | undefined = await WeatherService.resolveLocation(useDeviceLocation);
+    if (resolved === undefined) { return fallback; }
     const kit: WeatherModuleLike | null = await WeatherService.weather();
     if (kit === null) {
       fallback.source = '天气暂不可用，使用手动温度';
-      return fallback;
+      return WeatherService.publicForecast(resolved, fallback);
     }
-    const resolved: ResolvedLocation | undefined = await WeatherService.resolveLocation(useDeviceLocation);
-    if (resolved === undefined) { return fallback; }
     try {
       const weather: WeatherLike = await kit.getWeatherWithContext(context, {
         location: resolved.location,
@@ -198,7 +217,7 @@ export class WeatherService {
       }
       if (!Number.isFinite(tempMin) || !Number.isFinite(tempMax) || tempMin > tempMax) {
         fallback.source = '天气数据异常，使用手动温度';
-        return fallback;
+        return WeatherService.publicForecast(resolved, fallback);
       }
       const snapshot: WeatherSnapshot = {
         available: true,
@@ -214,7 +233,7 @@ export class WeatherService {
       // 1011900001 表示应用未在 AGC 配置天气服务能力；如实提示，不猜测天气。
       hilog.warn(DOMAIN, TAG, 'weather request failed');
       fallback.source = '天气获取失败，使用手动温度';
-      return fallback;
+      return WeatherService.publicForecast(resolved, fallback);
     }
   }
 }

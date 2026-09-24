@@ -108,6 +108,7 @@ function makeIndexProbe() {
     ...MIGRATION,
     recognitionSummary: RECOGNITION.recognitionSummary,
     RECOGNITION_SOURCE_PIXEL_COLOR: RECOGNITION.RECOGNITION_SOURCE_PIXEL_COLOR,
+    garmentModel: { classify: async () => undefined },
     activeImportImage: GI.activeImageUri,
     DemoRepository: ProbeRepository,
     readSnapshot: () => data.initialSnapshot(),

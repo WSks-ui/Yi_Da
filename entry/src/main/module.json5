@@ -12,6 +12,9 @@
     // 模拟器没有对应能力时 WeatherService 会回退到手动城市与温度，不影响离线衣橱。
     "requestPermissions": [
       {
+        "name": "ohos.permission.INTERNET"
+      },
+      {
         "name": "ohos.permission.APPROXIMATELY_LOCATION",
         "reason": "$string:location_permission_reason",
         "usedScene": {

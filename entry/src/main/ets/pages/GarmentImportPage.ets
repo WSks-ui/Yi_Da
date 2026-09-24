@@ -28,11 +28,13 @@ export struct GarmentImportPage {
   @Prop busy: boolean = false;
   @Prop recognitionMessage: string = '';
   @Prop recognitionColor: string = '';
+  @Prop recognitionCategory: string = '';
   @Prop recognitionBusy: boolean = false;
   onPick: () => void = () => {};
   onSample: (id: string) => void = () => {};
   onRecognize: (index: number) => void = () => {};
   onUseRecognition: (index: number) => void = () => {};
+  onUseCategory: (index: number) => void = () => {};
   onSelect: (index: number) => void = () => {};
   onMove: (index: number) => void = () => {};
   onConfirm: (index: number) => void = () => {};
@@ -545,7 +547,7 @@ export struct GarmentImportPage {
       Column({ space: Theme.spaceXs }) {
         Row({ space: Theme.spaceS }) {
           Text('颜色').fontSize(Type.bodySmall).fontColor(Theme.text).layoutWeight(1).maxLines(1)
-          Button(this.recognitionBusy ? '分析中' : '分析图片主色', { type: ButtonType.Normal })
+          Button(this.recognitionBusy ? '分析中' : '端侧分析衣物', { type: ButtonType.Normal })
             .height(32).fontSize(Type.buttonSmall).borderRadius(Theme.radiusInput)
             .backgroundColor(Theme.accentSoft).fontColor(Theme.accent)
             .enabled(this.currentCanEdit() && this.currentOriginalUri().length > 0 && !this.recognitionBusy)
@@ -555,14 +557,21 @@ export struct GarmentImportPage {
         if (this.recognitionMessage.length > 0) {
           Row({ space: Theme.spaceS }) {
             Text(this.recognitionMessage).fontSize(Type.caption).fontColor(Theme.secondary)
-              .layoutWeight(1).maxLines(3)
+              .layoutWeight(1).maxLines(5)
             if (this.recognitionColor.length > 0 && this.currentColor() !== this.recognitionColor) {
-              Button('采用', { type: ButtonType.Normal }).height(32).fontSize(Type.buttonSmall)
+              Button('用颜色', { type: ButtonType.Normal }).height(32).fontSize(Type.buttonSmall)
                 .backgroundColor(Theme.accentSoft).fontColor(Theme.accent).borderRadius(Theme.radiusInput)
                 .enabled(this.currentCanEdit())
                 .onClick(() => this.onUseRecognition(this.currentIndex))
             }
           }.width('100%')
+          if (this.recognitionCategory.length > 0 && this.currentSubcategory() !== this.recognitionCategory) {
+            Button(`用类别：${this.recognitionCategory}`, { type: ButtonType.Normal })
+              .height(32).fontSize(Type.buttonSmall)
+              .backgroundColor(Theme.accentSoft).fontColor(Theme.accent).borderRadius(Theme.radiusInput)
+              .enabled(this.currentCanEdit())
+              .onClick(() => this.onUseCategory(this.currentIndex))
+          }
         }
         Flex({ wrap: FlexWrap.Wrap }) {
           Text('未设置').fontSize(Type.caption)

@@ -16,3 +16,11 @@
 | demo_knit.jpg | photo-1576566588028-4147f3842f27 | 米白印花短袖 |
 
 下载日期：2026-09-13。应用展示使用打包资源，无需运行时联网。对图片中的品牌不作背书。
+
+## 端侧模型
+
+`entry/src/main/resources/rawfile/mobilenetv2_openimage.ms` 来自 MindSpore Lite Model Zoo 的
+Open Images MobileNetV2 模型。模型文件用于端侧推理候选提示，不能直接证明专用服装分类准确率；
+应用只映射少量与衣橱大类相符的标签，并要求用户确认。MindSpore Model Zoo 代码与模型生态遵循
+Apache License 2.0，模型下载地址为：
+https://download.mindspore.cn/model_zoo/official/lite/mobilenetv2_openimage_lite/mobilenetv2.ms

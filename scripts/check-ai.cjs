@@ -15,6 +15,34 @@ require.extensions['.ets'] = (loadedModule, filename) => {
 
 const recognition = require('../entry/src/main/ets/service/GarmentRecognition.ets');
 const inference = require('../entry/src/main/ets/service/NeuralInference.ets');
+const clothing = require('../entry/src/main/ets/service/OpenImageClothing.ets');
+
+test('端侧 Open Images 只建议可映射衣物，弱命中、非衣物及尺寸不符时放弃', () => {
+  const scores = new Float32Array(clothing.OPEN_IMAGE_OUTPUT_SIZE);
+  scores[91] = 0.88;
+  const jeans = clothing.chooseClothingCandidate(scores);
+  assert.equal(jeans.subcategory, '牛仔裤');
+  assert.equal(jeans.category, '下装');
+  scores[91] = 0.1;
+  assert.equal(clothing.chooseClothingCandidate(scores), undefined);
+  scores[91] = 0.5;
+  scores[22] = 0.95;
+  assert.equal(clothing.chooseClothingCandidate(scores), undefined);
+  assert.equal(clothing.chooseClothingCandidate(new Float32Array(1000)), undefined);
+});
+
+test('模型 RGBA 预处理只读真实像素并核对输入尺寸', () => {
+  const bytes = new Uint8Array(224 * 224 * 4);
+  bytes[0] = 255;
+  bytes[1] = 0;
+  bytes[2] = 0;
+  bytes[3] = 255;
+  const result = clothing.normalizeOpenImagePixels(bytes);
+  assert.equal(result.length, 224 * 224 * 3);
+  assert.ok(result[0] > 2);
+  assert.ok(result[1] < -1);
+  assert.throws(() => clothing.normalizeOpenImagePixels(new Uint8Array(4)), /尺寸/);
+});
 
 test('类别和材质文件名提示覆盖代表性 token，并明确低于自动采用阈值', () => {
   assert.ok(recognition.GARMENT_CATEGORIES.length >= 70);

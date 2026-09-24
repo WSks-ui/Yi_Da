@@ -42,6 +42,8 @@ import { GarmentImportPage } from './GarmentImportPage';
 import { bundledPhotoId, bundledPhotoSource, importBundledGarmentPhoto } from '../service/BundledGarmentPhotos';
 import { GarmentRecognition, recognizeGarment, recognitionSummary, RECOGNITION_SOURCE_PIXEL_COLOR }
   from '../service/GarmentRecognition';
+import { garmentModel } from '../service/OnDeviceGarmentModel';
+import { ClothingCandidate } from '../service/OpenImageClothing';
 import { createSyncEnvelope, SyncEnvelope } from '../service/WardrobeSync';
 import { commitWardrobeMigrationCandidate, MigrationPreparationResult,
   prepareWardrobeMigration, WardrobeMigrationCandidate } from '../service/WardrobeMigration';
@@ -63,6 +65,8 @@ interface ImportRecognitionHint {
   taskId: string;
   originalUri: string;
   color: string;
+  categoryIndex: number;
+  subcategory: string;
   message: string;
 }
 
@@ -982,7 +986,7 @@ struct Index {
       hint.taskId === item.id && hint.originalUri === item.originalUri);
   }
 
-  // 只对已复制到本机的原图分析像素。异步结束后按会话、taskId 和图片 URI 核对，
+  // 只对已复制到本机的原图分析像素并运行端侧模型。异步结束后按会话、taskId 和图片 URI 核对，
   // 防止用户切项、跳过或重新复制时，旧建议写到另一件衣物上。
   private async recognizeImportColor(index: number): Promise<void> {
     const item: ImportItem | undefined = this.importItems[index];
@@ -995,25 +999,31 @@ struct Index {
     this.recognizingImportTaskId = taskId;
     try {
       const result: GarmentRecognition = await recognizeGarment(originalUri);
+      let candidate: ClothingCandidate | undefined = undefined;
+      try { candidate = await garmentModel.classify(originalUri, this.context()); }
+      catch (_) { /* 模型或设备能力不可用时，主色与手填流程继续可用。 */ }
       const current: ImportItem | undefined = session.find(taskId);
       if (!this.alive || this.mainRoute !== 'garmentImport' || this.importCtl === undefined ||
         this.importCtl.currentSession() !== session || current === undefined ||
         current.originalUri !== originalUri || current.phase === ImportPhase.SAVED ||
         current.phase === ImportPhase.SKIPPED) { return; }
       const usable: boolean = result.colorSource === RECOGNITION_SOURCE_PIXEL_COLOR && result.color.length > 0;
-      // 提示分来自像素投票，并非经过模型校准的概率。类别与材质没有视觉模型时留空。
-      const message: string = recognitionSummary(result);
+      // 模型是通用多标签分类器，只给少数可映射到衣橱的品类候选；用户自行确认。
+      const categoryIndex: number = candidate === undefined ? -1 : CATEGORIES.indexOf(candidate.category);
+      const message: string = recognitionSummary(result) + (candidate === undefined ? '' :
+        ` 端侧模型候选：${candidate.subcategory}（${candidate.label}，模型分 ${Math.round(candidate.score * 100)}%，请核对）。`);
       const hint: ImportRecognitionHint = { taskId: taskId, originalUri: originalUri,
-        color: usable ? result.color : '', message: message };
+        color: usable ? result.color : '', categoryIndex: categoryIndex,
+        subcategory: candidate === undefined ? '' : candidate.subcategory, message: message };
       this.importRecognitionHints = this.importRecognitionHints.filter((entry: ImportRecognitionHint) =>
         entry.taskId !== taskId).concat([hint]);
     } catch (error) {
       const current: ImportItem | undefined = session.find(taskId);
       if (this.alive && this.mainRoute === 'garmentImport' && current !== undefined &&
         current.originalUri === originalUri) {
-        this.importRecognitionHints = this.importRecognitionHints.filter((entry: ImportRecognitionHint) =>
-          entry.taskId !== taskId).concat([{ taskId: taskId, originalUri: originalUri,
-            color: '', message: '图片分析未完成，请手动选色' }]);
+          this.importRecognitionHints = this.importRecognitionHints.filter((entry: ImportRecognitionHint) =>
+            entry.taskId !== taskId).concat([{ taskId: taskId, originalUri: originalUri,
+              color: '', categoryIndex: -1, subcategory: '', message: '图片分析未完成，请手动填写' }]);
       }
     } finally {
       if (this.recognizingImportTaskId === taskId) { this.recognizingImportTaskId = ''; }
@@ -1028,6 +1038,17 @@ struct Index {
       entry.taskId === item.id && entry.originalUri === item.originalUri);
     if (hint === undefined || hint.color.length === 0) { return; }
     this.importColor(index, hint.color);
+  }
+
+  private useRecognizedCategory(index: number): void {
+    const item: ImportItem | undefined = this.importItems[index];
+    if (item === undefined || isActivePhase(item.phase) || item.phase === ImportPhase.SAVED ||
+      item.phase === ImportPhase.SKIPPED) { return; }
+    const hint: ImportRecognitionHint | undefined = this.importRecognitionHints.find((entry: ImportRecognitionHint) =>
+      entry.taskId === item.id && entry.originalUri === item.originalUri);
+    if (hint === undefined || hint.categoryIndex < 0 || hint.subcategory.length === 0) { return; }
+    this.importCategory(index, hint.categoryIndex);
+    this.importSubcategory(index, hint.subcategory);
   }
 
   // 原图/抠图切换只作用于当前项，不动其它任务。
@@ -2026,9 +2047,11 @@ struct Index {
           busy: this.commitInFlight,
           recognitionMessage: this.importRecognitionHint()?.message || '',
           recognitionColor: this.importRecognitionHint()?.color || '',
+          recognitionCategory: this.importRecognitionHint()?.subcategory || '',
           recognitionBusy: this.recognizingImportTaskId.length > 0,
           onRecognize: (index: number) => { this.recognizeImportColor(index); },
           onUseRecognition: (index: number) => { this.useRecognizedColor(index); },
+          onUseCategory: (index: number) => { this.useRecognizedCategory(index); },
           onPick: () => { this.pickImportPhotos(); },
           onSample: (id: string) => { this.pickImportSample(id); },
           onSelect: (index: number) => { this.importMove(index); },
