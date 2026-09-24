@@ -21,7 +21,10 @@ const { ImportSession } = require('../entry/src/main/ets/service/GarmentImportRu
 const { GarmentImportController } = require('../entry/src/main/ets/service/GarmentImportController.ets');
 const { SnapshotCommit } = require('../entry/src/main/ets/service/SnapshotCommit.ets');
 const TRY_ON_DEMO = require('../entry/src/main/ets/service/TryOnDemo.ets');
+const SYNC = require('../entry/src/main/ets/service/WardrobeSync.ets');
+const MIGRATION = require('../entry/src/main/ets/service/WardrobeMigration.ets');
 const GI = require('../entry/src/main/ets/service/GarmentImport.ets');
+const RECOGNITION = require('../entry/src/main/ets/service/GarmentRecognition.ets');
 
 const INDEX_SOURCE_PATH = path.resolve(__dirname, '../entry/src/main/ets/pages/Index.ets');
 const INDEX_SOURCE = fs.readFileSync(INDEX_SOURCE_PATH, 'utf8');
@@ -72,7 +75,16 @@ function makeIndexProbe() {
   const platform = {
     cutout: () => Promise.reject(new Error('当前设备不支持主体抠图')),
     cutoutSupported: () => false,
-    cutoutInFlight: () => false
+    cutoutInFlight: () => false,
+    bundledCopies: [],
+    bundledImport(context, id, targetPath) {
+      this.bundledCopies.push({ id, targetPath });
+      return Promise.resolve('file://sandbox/' + id + '.png');
+    },
+    recognize: () => Promise.resolve({ category: '', color: '', material: '', confidence: 0,
+      source: 'unavailable', userConfirmed: false }),
+    migrationExport: () => Promise.resolve({ status: 'saved', message: '已保存' }),
+    migrationPick: () => Promise.resolve({ status: 'cancelled', message: '已取消导入' })
   };
   const wardrobe = require('../entry/src/main/ets/model/Wardrobe.ets');
   const data = require('../entry/src/main/ets/data/DemoData.ets');
@@ -92,11 +104,25 @@ function makeIndexProbe() {
     GarmentImportController,
     SnapshotCommit,
     ...TRY_ON_DEMO,
+    ...SYNC,
+    ...MIGRATION,
+    recognitionSummary: RECOGNITION.recognitionSummary,
+    RECOGNITION_SOURCE_PIXEL_COLOR: RECOGNITION.RECOGNITION_SOURCE_PIXEL_COLOR,
     activeImportImage: GI.activeImageUri,
     DemoRepository: ProbeRepository,
     readSnapshot: () => data.initialSnapshot(),
+    validateSnapshot: (snapshot) => snapshot,
+    exportWardrobeMigrationWithPicker: (...args) => platform.migrationExport(...args),
+    selectMigrationPackageWithPicker: (...args) => platform.migrationPick(...args),
+    createCoreFileMigrationTargetAdapter: () => ({
+      isPrivateUri: (uri) => uri.startsWith('file://sandbox/'),
+      destinationUri: (assetId) => 'file://sandbox/' + assetId + '.bin',
+      write: async () => {}, remove: async () => {}
+    }),
+    util: { TextEncoder: class { encodeInto(value) { return Buffer.from(value, 'utf8'); } } },
     WeatherService: {
       setManualCity() {},
+      clearManualCity() {},
       refresh: () => Promise.resolve({ available: false, city: '', condition: '', tempMin: 0, tempMax: 0, source: '手动温度' })
     },
     formProvider: {
@@ -117,6 +143,12 @@ function makeIndexProbe() {
     cutoutGarment: (...args) => platform.cutout(...args),
     cutoutSupported: () => platform.cutoutSupported(),
     cutoutInFlight: () => platform.cutoutInFlight(),
+    bundledPhotoSource: (id) => ['demo_shirt', 'demo_jacket', 'demo_sneakers'].includes(id)
+      ? 'bundled-garment-photo:' + id : '',
+    bundledPhotoId: (source) => source.startsWith('bundled-garment-photo:')
+      ? source.slice('bundled-garment-photo:'.length) : '',
+    importBundledGarmentPhoto: (...args) => platform.bundledImport(...args),
+    recognizeGarment: (uri) => platform.recognize(uri),
     $r: (value) => value,
     animateTo: (options, action) => action(),
     Curve: { FastOutSlowIn: 0 }
@@ -169,6 +201,7 @@ function makeIndexRepository(options = {}) {
         this.disk.push(JSON.parse(payload));
       });
     },
+    save(snapshot) { return this.savePayload(JSON.stringify(snapshot)); },
     discardImage(uri) { this.discarded.push(uri); return Promise.resolve(); },
     sweepOrphans() { return Promise.resolve(0); }
   };
@@ -263,6 +296,27 @@ test('真实 Index：订阅收到异步 READY，两个导入项字段独立且�
   page.importName(1, '第二件');
   assert.equal(page.importItems[0].draft.name, '第一件');
   assert.equal(page.importItems[1].draft.name, '第二件');
+});
+
+test('真实 Index：随包照片进入同一导入会话，确认后保存独立沙箱图片', async () => {
+  const { page, repository, platform } = makeIndexPage();
+  await page.pickImportSample('demo_shirt');
+  await flushMicrotasks();
+  assert.equal(page.importItems.length, 1);
+  assert.equal(page.importItems[0].phase, ImportPhase.READY);
+  assert.equal(page.importItems[0].sourceUri, 'bundled-garment-photo:demo_shirt');
+  assert.equal(page.importItems[0].originalUri, 'file://sandbox/demo_shirt.png');
+  assert.equal(platform.bundledCopies.length, 1);
+  assert.equal(repository.copyCalls.length, 0, '随包资源不能误送系统相册 URI 读取路径');
+
+  fillIndexDraft(page, 0, '新录入的衬衫');
+  await page.importConfirm(0);
+  await flushMicrotasks();
+  assert.equal(repository.disk.length, 1);
+  assert.equal(repository.disk[0].garments.length, 1);
+  assert.equal(repository.disk[0].garments[0].imageUri, 'file://sandbox/demo_shirt.png');
+  assert.equal(repository.disk[0].garments[0].isDemo, true);
+  assert.equal(page.importItems[0].phase, ImportPhase.SAVED);
 });
 
 test('真实 Index：COPY 失败后重试导入复用任务并保留已填写字段', async () => {
@@ -835,4 +889,183 @@ test('真实 Index：各试穿入口统一走 openTryOn，并向页面传递 ini
   assert.match(INDEX_SOURCE, /onTryOn: \(look: Outfit\) => \{ this\.selectedLook = look; this\.openTryOn\(\); \}/);
   assert.match(INDEX_SOURCE, /onOpenTryOn: \(sceneId\?: string\) => \{ this\.openTryOn\(sceneId\); \}/);
   assert.match(INDEX_SOURCE, /initialSceneId: this\.tryOnSceneId/);
+});
+
+test('试穿演示：只延迟返回选中场景的固定正面样片，并拒绝未知场景', async () => {
+  const waits = [];
+  const result = await TRY_ON_DEMO.simulateTryOnDemo('navy_top', async (milliseconds) => {
+    waits.push(milliseconds);
+  });
+  assert.deepEqual(waits, [900], '模拟状态应经过可见等待，但测试不依赖真实定时器');
+  assert.deepEqual(result, { sceneId: 'navy_top', poseId: 'front', status: 'preset-demo' });
+  await assert.rejects(TRY_ON_DEMO.simulateTryOnDemo('unknown', async () => {}), /未知/);
+});
+
+test('试穿演示：三姿势资源契约只声明已有正面素材，不混用其他样片', () => {
+  assert.deepEqual(TRY_ON_DEMO.DEMO_POSES.map((pose) => pose.id), ['front', 'side', 'back']);
+  const mediaSource = fs.readFileSync(
+    path.resolve(__dirname, '../entry/src/main/ets/service/TryOnDemoMedia.ets'), 'utf8');
+  assert.match(mediaSource, /if \(poseId === 'front'\) \{ return demoImages\(sceneId\)\.result; \}/);
+  assert.match(mediaSource, /return undefined;/,
+    '侧面和背面缺少同组素材时必须保持不可用');
+});
+
+test('真实 Index：图片主色分析迟到不覆盖手动颜色，采用后只更新对应任务', async () => {
+  const { page, repository, platform } = makeIndexPage();
+  await prepareIndexImport(page, repository, ['photo-a', 'photo-b']);
+  const gate = deferred();
+  platform.recognize = () => gate.promise;
+  page.importColor(0, '黑色');
+  const pending = page.recognizeImportColor(0);
+  page.importMove(1);
+  gate.resolve({ category: '', color: '红色', material: '', confidence: 0.78,
+    source: 'offline-pixel-color', colorSource: 'offline-pixel-color', colorConfidence: 0.78,
+    userConfirmed: false });
+  await pending;
+  assert.equal(page.importItems[0].draft.color, '黑色');
+  assert.equal(page.importItems[1].draft.color, '');
+  assert.equal(page.importRecognitionHints[0].taskId, page.importItems[0].id);
+  page.useRecognizedColor(0);
+  assert.equal(page.importItems[0].draft.color, '红色');
+  assert.equal(page.importItems[1].draft.color, '');
+});
+
+test('真实 Index：用户选择的细类和材质逐项保存，不从图片猜测', async () => {
+  const { page, repository } = makeIndexPage();
+  await prepareIndexImport(page, repository, ['photo-a', 'photo-b']);
+  fillIndexDraft(page, 0, '连帽衫');
+  page.importSubcategory(0, '连帽衫');
+  page.importMaterial(0, '棉');
+  fillIndexDraft(page, 1, '黑裤');
+  assert.equal(page.importItems[1].draft.subcategory, '');
+  assert.equal(page.importItems[1].draft.material, '');
+  await page.importConfirm(0);
+  assert.equal(repository.disk[0].garments.at(-1).subcategory, '连帽衫');
+  assert.equal(repository.disk[0].garments.at(-1).material, '棉');
+});
+
+test('真实 Index：身材档案先落盘再发布，并把新推荐选择写入同一快照', async () => {
+  const gate = deferred();
+  const { page, repository } = makeIndexPage({ saveHandler: () => gate.promise });
+  const data = require('../entry/src/main/ets/data/DemoData.ets');
+  page.mainRoute = 'tabs';
+  page.restore(data.initialSnapshot());
+  const originalHeight = page.body.height;
+  const next = { height: '168', size: 'M', fitPreference: '合身', shoulder: '40',
+    chest: '88', waist: '70', hip: '90', skinTone: '', hairColor: '', eyeColor: '', updatedAt: '2026-09-24' };
+  const pending = page.saveBodyProfile(next);
+  await flushMicrotasks();
+  assert.equal(page.body.height, originalHeight, '落盘期间不能先发布身材档案');
+  gate.resolve();
+  await pending;
+  assert.equal(page.body.height, '168');
+  assert.deepEqual(repository.disk[0].body, page.body);
+  assert.deepEqual(repository.disk[0].activeIds, page.activeIds);
+  assert.match(page.plans[0].reason, /体型建议/);
+});
+
+test('真实 Index：手动迁移导入先落盘再发布，覆盖确认后恢复候选快照', async () => {
+  const gate = deferred();
+  const { page, repository, platform } = makeIndexPage({ saveHandler: () => gate.promise });
+  const source = require('../entry/src/main/ets/data/DemoData.ets').initialSnapshot();
+  source.temperature = 18;
+  source.city = '北京';
+  const payload = await MIGRATION.exportWardrobeMigration(source,
+    { isPrivateUri: () => false, read: async () => { throw new Error('无图片'); } }, 'phone-a', 0);
+  platform.migrationPick = async () => ({ status: 'selected', value: payload, message: '已选择' });
+  page.mainRoute = 'tabs';
+  page.restore(require('../entry/src/main/ets/data/DemoData.ets').initialSnapshot());
+  page.commitLock.deferTemperature(31);
+  const oldTemperature = page.temperature;
+  const pending = page.importMigration();
+  await flushMicrotasks(20);
+  assert.equal(page.temperature, oldTemperature, '快照保存完成前不能发布导入温度');
+  gate.resolve();
+  await pending;
+  assert.equal(page.temperature, 18);
+  assert.equal(repository.disk[0].temperature, 18);
+  assert.equal(repository.disk[0].city, '北京');
+  assert.equal(page.commitLock.hasPendingTemperature(), false,
+    '导入不应把旧城市的待处理天气应用到恢复后的快照');
+});
+
+test('真实 Index：迁移快照落盘失败保留当前衣橱', async () => {
+  const { page, repository, platform } = makeIndexPage({
+    saveHandler: () => Promise.reject(new Error('磁盘不可写'))
+  });
+  const source = require('../entry/src/main/ets/data/DemoData.ets').initialSnapshot();
+  source.temperature = 18;
+  const payload = await MIGRATION.exportWardrobeMigration(source,
+    { isPrivateUri: () => false, read: async () => { throw new Error('无图片'); } }, 'phone-b', 0);
+  platform.migrationPick = async () => ({ status: 'selected', value: payload, message: '已选择' });
+  page.mainRoute = 'tabs';
+  page.restore(require('../entry/src/main/ets/data/DemoData.ets').initialSnapshot());
+  const before = page.temperature;
+  await assert.rejects(page.importMigration(), /磁盘不可写/);
+  assert.equal(page.temperature, before);
+  assert.equal(repository.disk.length, 0);
+});
+
+test('真实 Index：负温天气用于推荐，极端温度只在推荐值上限幅', async () => {
+  const cold = makeIndexPage();
+  cold.page.applyTemperature(-5);
+  await flushMicrotasks(20);
+  assert.equal(cold.page.temperature, -5);
+  assert.equal(cold.repository.disk[0].temperature, -5);
+
+  const extreme = makeIndexPage();
+  extreme.page.applyTemperature(-30);
+  await flushMicrotasks(20);
+  assert.equal(extreme.page.temperature, -20);
+  assert.equal(extreme.repository.disk[0].temperature, -20);
+});
+
+test('真实 Index：手动切城保存失败时不发布城市、温度和推荐', async () => {
+  const { page, repository } = makeIndexPage({
+    saveHandler: () => Promise.reject(new Error('磁盘不可写'))
+  });
+  const city = require('../entry/src/main/ets/model/Wardrobe.ets').CITIES[0];
+  const before = { city: page.city, temperature: page.temperature, activeIds: page.activeIds.slice() };
+  await page.applyCity(city, -5);
+  assert.equal(page.city, before.city);
+  assert.equal(page.temperature, before.temperature);
+  assert.deepEqual(page.activeIds, before.activeIds);
+  assert.equal(repository.disk.length, 0);
+  assert.ok(page.pendingRetry, '失败的手动切城应保留明确的重试入口');
+});
+
+test('真实 Index：迁移清理完成前一直阻止新图片导入', async () => {
+  const { page, repository, platform } = makeIndexPage();
+  const source = require('../entry/src/main/ets/data/DemoData.ets').initialSnapshot();
+  const payload = await MIGRATION.exportWardrobeMigration(source,
+    { isPrivateUri: () => false, read: async () => { throw new Error('无图片'); } }, 'phone-c', 0);
+  platform.migrationPick = async () => ({ status: 'selected', value: payload, message: '已选择' });
+  const sweep = deferred();
+  repository.sweepOrphans = () => sweep.promise;
+  const pending = page.importMigration();
+  await flushMicrotasks(20);
+  assert.equal(repository.disk.length, 1, '迁移快照应已落盘');
+  assert.equal(page.migrationBusy, true, '清理仍在途时迁移忙碌态必须保持');
+  assert.equal(page.navigating(), true, '新文件入口必须继续受迁移门禁阻挡');
+  sweep.resolve(0);
+  await pending;
+  assert.equal(page.migrationBusy, false);
+});
+
+test('真实 Index：只读恢复导入后完成一次清理并解除新导入门禁', async () => {
+  const { page, repository, platform } = makeIndexPage();
+  const source = require('../entry/src/main/ets/data/DemoData.ets').initialSnapshot();
+  const payload = await MIGRATION.exportWardrobeMigration(source,
+    { isPrivateUri: () => false, read: async () => { throw new Error('无图片'); } }, 'phone-d', 0);
+  platform.migrationPick = async () => ({ status: 'selected', value: payload, message: '已选择' });
+  page.readBlocked = true;
+  page.sweepDone = false;
+  page.orphanSwept = false;
+  let sweepCount = 0;
+  repository.sweepOrphans = async () => { sweepCount++; return 0; };
+  await page.importMigration();
+  assert.equal(page.readBlocked, false);
+  assert.equal(page.sweepDone, true);
+  assert.equal(page.orphanSwept, true);
+  assert.equal(sweepCount, 1, '恢复导入后不应再次启动异步清理');
 });
