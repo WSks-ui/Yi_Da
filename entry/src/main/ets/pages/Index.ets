@@ -1,15 +1,16 @@
-import { common, ConfigurationConstant } from '@kit.AbilityKit';
+import { abilityAccessCtrl, common, ConfigurationConstant, PermissionRequestResult } from '@kit.AbilityKit';
 import { formProvider, formBindingData } from '@kit.FormKit';
 import { systemShare } from '@kit.ShareKit';
 import { uniformTypeDescriptor } from '@kit.ArkData';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { util } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { Category, CATEGORIES, Garment, GarmentStatus, STATUSES, OCCASIONS, Outfit, OutfitRequest,
   Recommendation, DemoSnapshot, WearRecord, garmentImage, copyGarment,
   PreferenceProfile, emptyProfile, FITS, PALETTES, STYLES, DiaryEntry, TryOnTask, Membership,
   BodyProfile, emptyMembership, emptyBodyProfile, completeness, trialDaysLeft, CityOption, CITIES } from '../model/Wardrobe';
 import { initialSnapshot, demoGarments } from '../data/DemoData';
-import { DemoRepository, readSnapshot } from '../service/DemoRepository';
+import { DemoRepository, readSnapshot, validateSnapshot } from '../service/DemoRepository';
 import { localDay, recordedDays, saveDiary, removeDiary, DiaryMutation } from '../service/WearHistory';
 import { eligible, recommend, replaceGarment } from '../service/OutfitEngine';
 import { Theme, Type } from '../components/Theme';
@@ -25,6 +26,7 @@ import { OutfitDetailPage } from './OutfitDetailPage';
 import { DiaryPage } from './DiaryPage';
 import { TryOnPage } from './TryOnPage';
 import { ProfilePage, BodyProfileSheet } from './ProfilePage';
+import { SyncTransferSheet } from './SyncTransferSheet';
 import { CityPickerSheet } from './CityPicker';
 import { WardrobePage } from './WardrobePage';
 import { AddGarmentSheet, GarmentDraft, emptyDraft } from './AddGarmentSheet';
@@ -37,6 +39,14 @@ import { ImportHost, ImportSession } from '../service/GarmentImportRunner';
 import { GarmentImportController } from '../service/GarmentImportController';
 import { CommitCallbacks, SnapshotCommit } from '../service/SnapshotCommit';
 import { GarmentImportPage } from './GarmentImportPage';
+import { bundledPhotoId, bundledPhotoSource, importBundledGarmentPhoto } from '../service/BundledGarmentPhotos';
+import { GarmentRecognition, recognizeGarment, recognitionSummary, RECOGNITION_SOURCE_PIXEL_COLOR }
+  from '../service/GarmentRecognition';
+import { createSyncEnvelope, SyncEnvelope } from '../service/WardrobeSync';
+import { commitWardrobeMigrationCandidate, MigrationPreparationResult,
+  prepareWardrobeMigration, WardrobeMigrationCandidate } from '../service/WardrobeMigration';
+import { createCoreFileMigrationTargetAdapter, exportWardrobeMigrationWithPicker, MigrationPickerResult,
+  selectMigrationPackageWithPicker } from '../service/WardrobeMigrationHost';
 import { findDemoScene, saveDemoTask } from '../service/TryOnDemo';
 
 interface TextPair {
@@ -47,6 +57,13 @@ interface TextPair {
 interface StatValue {
   label: string;
   value: number;
+}
+
+interface ImportRecognitionHint {
+  taskId: string;
+  originalUri: string;
+  color: string;
+  message: string;
 }
 
 // 偏好测验的一道题。选项用文字卡呈现，点击后自动进入下一题，并保留“上一题”和“不确定”。
@@ -106,6 +123,9 @@ struct Index {
   // ---- 批量录入：队列与在途任务的唯一所有者是本页 ----
   @State importItems: ImportItem[] = [];
   @State importIndex: number = 0;
+  // 图片主色建议只属于当前导入会话，不落入衣橱快照；真正采用时仍通过会话编辑草稿。
+  @State importRecognitionHints: ImportRecognitionHint[] = [];
+  @State recognizingImportTaskId: string = '';
   // 单件换图的文件标识前缀。每次换图取一个不可复用的键，不复用草稿数组长度。
   private importSessionId: string = '';
   // 生产导入链：items / index / 串行拷贝 / 抠图 / 失效清理都由它持有。
@@ -119,6 +139,8 @@ struct Index {
   // 只有仓储写队列并不能阻止旧快照覆盖新数据——两个调用方各自构造全量快照后，后写的那个会赢。
   private commitLock: SnapshotCommit = SnapshotCommit.create();
   private commitInFlight: boolean = false;
+  // 手动迁移先写图片、后落盘快照；图片写入阶段同样禁止其它全量快照提交。
+  private migrationBusy: boolean = false;
   // 待重试的变更：顶部提示条只重试这一次变更，不提交任何残留候选。
   private pendingRetry: (() => void) | undefined = undefined;
   // 每次新操作、跳过、退出或重置都会推进代数，令旧失败回调失效，避免覆盖后续输入。
@@ -183,7 +205,7 @@ struct Index {
     } catch (error) {
       this.restore(initialSnapshot());
       this.readBlocked = true;
-      this.notice = '本地记录无法读取。已显示只读示例，可在“我的”重置演示';
+      this.notice = '本地记录无法读取。已显示示例衣橱，可在“我的”导入备份或重置';
       hilog.error(0x1200, 'YiDa', 'Read demo snapshot failed');
     }
     this.refreshWeather();
@@ -217,12 +239,45 @@ struct Index {
     });
   }
 
+  // 用户点“使用当前位置”后才请求前台粗略定位；拒绝或设备缺 Kit 时继续保留手动城市。
+  // request 代数使权限弹窗期间的旧天气回调失效，避免旧城市结果覆盖用户刚改的温度。
+  private async refreshWeatherAtLocation(): Promise<void> {
+    const request: number = ++this.weatherRequest;
+    try {
+      const permission: PermissionRequestResult = await abilityAccessCtrl.createAtManager()
+        .requestPermissionsFromUser(this.context(), ['ohos.permission.APPROXIMATELY_LOCATION']);
+      if (!this.alive || request !== this.weatherRequest) { return; }
+      if (permission.authResults.length === 0 || permission.authResults[0] !== 0) {
+        this.toast('未取得定位授权，可继续手动选择城市和温度');
+        return;
+      }
+      const snapshot: WeatherSnapshot = await WeatherService.refresh(this.context(), true);
+      if (!this.alive || request !== this.weatherRequest) { return; }
+      this.weather = snapshot;
+      if (snapshot.available && snapshot.tempMax >= snapshot.tempMin) {
+        this.applyTemperature(Math.round((snapshot.tempMin + snapshot.tempMax) / 2));
+        if (snapshot.city !== '当前位置') {
+          this.toast('未取得当前位置，已使用手动城市的天气');
+        }
+      } else {
+        this.toast(snapshot.source);
+      }
+    } catch (error) {
+      if (this.alive && request === this.weatherRequest) {
+        this.toast('当前设备无法定位，可继续手动选择城市和温度');
+      }
+    }
+  }
+
   // 天气是异步到达的：提交锁期间到达的温度不能中途改掉正在落盘的快照。
   // 先记下来，等本次提交结束后再用最新完整状态应用并补存。
   private applyTemperature(mid: number): void {
-    if (mid < 5 || mid > 35 || mid === this.temperature) { return; }
-    if (this.commitInFlight) { this.commitLock.deferTemperature(mid); return; }
-    this.temperature = mid;
+    if (!Number.isFinite(mid)) { return; }
+    // 天气卡保留服务给出的实际区间；推荐引擎支持 -20~45℃，极端值只在推荐温度上限幅。
+    const next: number = Math.max(-20, Math.min(45, Math.round(mid)));
+    if (next === this.temperature) { return; }
+    if (this.commitInFlight || this.migrationBusy) { this.commitLock.deferTemperature(next); return; }
+    this.temperature = next;
     this.regenerate();
     this.persist();
   }
@@ -297,12 +352,13 @@ struct Index {
     // 已选过城市就把它作为手动坐标，天气取不到时温度仍有依据。
     const saved: CityOption | undefined = CITIES.find((item: CityOption) => item.name === this.city);
     if (saved !== undefined) { WeatherService.setManualCity(saved); }
+    else { WeatherService.clearManualCity(); }
     this.regenerate();
   }
 
   private request(): OutfitRequest {
     return { occasion: this.occasion, temperature: this.temperature, lockedIds: this.lockedIds,
-      excludedIds: this.excludedIds, profile: this.profile };
+      excludedIds: this.excludedIds, profile: this.profile, body: this.body };
   }
 
   private regenerate(): void {
@@ -368,6 +424,14 @@ struct Index {
       membership: base.membership, body: base.body, city: base.city };
   }
 
+  private withBody(next: BodyProfile, activeIds: string[]): DemoSnapshot {
+    const base: DemoSnapshot = this.snapshot();
+    return { version: base.version, garments: base.garments, saved: base.saved, records: base.records,
+      occasion: base.occasion, temperature: base.temperature, activeIds: activeIds,
+      profile: base.profile, diary: base.diary, tryOnTasks: base.tryOnTasks,
+      membership: base.membership, body: next, city: base.city };
+  }
+
   // ---- 快照提交：所有写入口都走这里 ----
   //
   // 顺序契约（本页与 service/SnapshotCommit.ets 共同保证）：
@@ -380,7 +444,7 @@ struct Index {
     preserveExistingRetry: boolean = false): Promise<boolean> {
     if (!this.repository) { return Promise.resolve(false); }
     // 业务请求不排队覆盖候选：调用方必须保留草稿并等待用户明确重试。
-    if (this.commitInFlight || this.commitLock.isLocked()) {
+    if (this.migrationBusy || this.commitInFlight || this.commitLock.isLocked()) {
       if (this.alive) { this.toast('正在保存上一项，请稍候'); }
       return Promise.resolve(false);
     }
@@ -446,7 +510,7 @@ struct Index {
   private afterPublish(callback?: () => void): void {
     if (callback !== undefined) { callback(); }
     const mid: number = this.commitLock.takeTemperature();
-    if (!Number.isNaN(mid) && mid >= 5 && mid <= 35 && mid !== this.temperature) {
+    if (!Number.isNaN(mid) && mid >= -20 && mid <= 45 && mid !== this.temperature) {
       // 用最新完整状态应用外部变更，再补存一次；旧快照永不进仓储队列。
       this.temperature = mid;
       this.regenerate();
@@ -462,7 +526,7 @@ struct Index {
   }
 
   // 卡片唤起、批量子表单调用的入口：提交进行中就不要中途插入新导航。
-  private navigating(): boolean { return this.commitInFlight || this.commitLock.isLocked(); }
+  private navigating(): boolean { return this.migrationBusy || this.commitInFlight || this.commitLock.isLocked(); }
 
   // 所有会改变已发布快照的业务入口共用这道门：提交期间只提示并保留当前输入，
   // 不让调用方先改内存、随后又把一次被拒绝的提交误报成失败重试。
@@ -510,7 +574,9 @@ struct Index {
   private filteredItems(): Garment[] {
     return this.garments.filter((item: Garment) => (this.filterCategory === '全部' || item.category === this.filterCategory) &&
       (this.filterStatus === '全部状态' || item.status === this.filterStatus) &&
-      (item.name.indexOf(this.search.trim()) >= 0 || item.color.indexOf(this.search.trim()) >= 0));
+      (item.name.indexOf(this.search.trim()) >= 0 || item.color.indexOf(this.search.trim()) >= 0 ||
+        (item.subcategory || '').indexOf(this.search.trim()) >= 0 ||
+        (item.material || '').indexOf(this.search.trim()) >= 0));
   }
 
   private changeConditions(): void {
@@ -522,7 +588,7 @@ struct Index {
   private async shareLook(look: Outfit): Promise<void> {
     try {
       const content: string = '艺起搭 · ' + look.occasion + '穿搭\n' +
-        this.itemsFor(look).map((item: Garment) => item.name).join(' + ') + '\n' + look.reason + '\n来自艺起搭本地演示版';
+        this.itemsFor(look).map((item: Garment) => item.name).join(' + ') + '\n' + look.reason + '\n来自艺起搭';
       const data: systemShare.SharedData = new systemShare.SharedData({
         utd: uniformTypeDescriptor.UniformDataType.PLAIN_TEXT, content: content
       });
@@ -633,8 +699,7 @@ struct Index {
   private openImport(): void {
     this.importIndex = 0;
     this.openRoute('garmentImport');
-    // 页面入场后再拉起相册，避免Picker 盖在还未上屏的页面上。
-    setTimeout(() => { this.pickImportPhotos(); }, 320);
+    // 首屏展示系统相册与随包照片两个真实入口，由用户选择本次的图片来源。
   }
 
   private openEdit(): void {
@@ -660,7 +725,16 @@ struct Index {
   // ---- 提交链与导入链辅助 ----
 
   // 打开相册前的容量检查。
-  private importCapacity(): number { return remainingCapacity(this.garments.length); }
+  private importCapacity(): number {
+    const session: ImportSession | undefined = this.importCtl === undefined
+      ? undefined : this.importCtl.currentSession();
+    return session === undefined ? remainingCapacity(this.garments.length) : session.capacity(this.garments.length);
+  }
+
+  private importCapacityNotice(): string {
+    return this.garments.length >= 100 ? '衣橱已满 100 件，请先整理后再添加'
+      : '本次最多加入 10 张照片，完成后可再次录入';
+  }
 
   // 单件换图的文件标识：每次调用都取一个不可复用的键。
   // 不能拿草稿数组长度当序号：取消一次再换一次会取到同一个值，覆盖上一张未保存的图片。
@@ -727,12 +801,18 @@ struct Index {
   }
 
   // 把仓储与系统能力接进导入链；状态转换不在页面里重复实现。
-  private importHost(): ImportHost {
+  private importHost(sampleSource: string = ''): ImportHost {
     return {
-      pick: (limit: number) => this.repository ? this.repository.chooseImages(limit) : Promise.resolve([]),
-      copy: (sourceUri: string, taskId: string) => this.repository
-        ? this.repository.importImage(sourceUri, this.repository.originalPathFor(taskId))
-        : Promise.reject(new Error('仓储尚未就绪')),
+      pick: (limit: number) => sampleSource.length > 0 ? Promise.resolve([sampleSource])
+        : (this.repository ? this.repository.chooseImages(limit) : Promise.resolve([])),
+      copy: (sourceUri: string, taskId: string) => {
+        if (!this.repository) { return Promise.reject(new Error('仓储尚未就绪')); }
+        const sampleId: string = bundledPhotoId(sourceUri);
+        const target: string = this.repository.originalPathFor(taskId);
+        return sampleId.length > 0
+          ? importBundledGarmentPhoto(this.context(), sampleId, target)
+          : this.repository.importImage(sourceUri, target);
+      },
       cutout: (originalUri: string, taskId: string) => {
         if (!cutoutSupported()) { return Promise.reject(new Error('当前设备不支持主体抠图，可继续使用原图')); }
         if (cutoutInFlight()) { return Promise.reject(new Error('已有一个抠图任务在进行，请等它结束再试')); }
@@ -760,7 +840,7 @@ struct Index {
   // 取消时返回 0，不生成空衣物、不显示失败。
   private async pickImportPhotos(): Promise<void> {
     if (!this.repository || this.mainRoute !== 'garmentImport') { return; }
-    if (this.importCapacity() <= 0) { this.toast('衣橱已满 100 件，请先整理后再添加'); return; }
+    if (this.importCapacity() <= 0) { this.toast(this.importCapacityNotice()); return; }
     // 启动遗留清理结束前不建立新文件：否则新文件可能被当成遗留文件删掉。
     if (!this.sweepDone) { this.toast('正在整理本机文件，请稍候再选'); return; }
     if (this.importing || this.navigating()) { return; }
@@ -782,6 +862,31 @@ struct Index {
     }
   }
 
+  // 随包照片只作为本次会话的来源标识；复制成功后仍由同一任务持有独立 PNG，
+  // 保存、重试和退出清理与系统相册选中的照片完全一致。
+  private async pickImportSample(id: string): Promise<void> {
+    if (!this.repository || this.mainRoute !== 'garmentImport') { return; }
+    if (this.importCapacity() <= 0) { this.toast(this.importCapacityNotice()); return; }
+    if (!this.sweepDone) { this.toast('正在整理本机文件，请稍候再选'); return; }
+    if (this.importing || this.navigating()) { return; }
+    this.importing = true;
+    try {
+      const source: string = bundledPhotoSource(id);
+      if (source.length === 0) { throw new Error('未知示例照片'); }
+      const session: ImportSession = this.importSessionRef();
+      const created: number = await session.pick(this.importHost(source), this.garments.length);
+      if (created > 0) {
+        this.invalidateRetry();
+        this.toast('已加入示例照片');
+      }
+    } catch (error) {
+      this.toast('示例照片未能导入，请重试');
+    } finally {
+      this.importing = false;
+      if (this.pendingImportCardOpen) { this.maybeHandlePendingImportCard(this.importItems); }
+    }
+  }
+
   // 页面只调用会话；快照由会话通过 subscribe 发布，不在这里手工同步。
   private importMove(index: number): void {
     if (this.navigating()) { return; }
@@ -798,6 +903,18 @@ struct Index {
     if (this.navigating()) { return; }
     this.invalidateRetry();
     this.importApply(index, 'color', value);
+  }
+
+  private importSubcategory(index: number, value: string): void {
+    if (this.navigating()) { return; }
+    this.invalidateRetry();
+    this.importApply(index, 'subcategory', value);
+  }
+
+  private importMaterial(index: number, value: string): void {
+    if (this.navigating()) { return; }
+    this.invalidateRetry();
+    this.importApply(index, 'material', value);
   }
 
   private importOccasions(index: number, occasions: string[]): void {
@@ -845,11 +962,72 @@ struct Index {
       if (field === 'color' && typeof value === 'string') {
         return applyDraft(items, id, { color: value });
       }
+      if (field === 'subcategory' && typeof value === 'string') {
+        return applyDraft(items, id, { subcategory: value });
+      }
+      if (field === 'material' && typeof value === 'string') {
+        return applyDraft(items, id, { material: value });
+      }
       if (field === 'occasions' && Array.isArray(value)) {
         return applyDraft(items, id, { occasions: value as string[] });
       }
       return items;
     });
+  }
+
+  private importRecognitionHint(): ImportRecognitionHint | undefined {
+    const item: ImportItem | undefined = this.importItems[this.importIndex];
+    if (item === undefined) { return undefined; }
+    return this.importRecognitionHints.find((hint: ImportRecognitionHint) =>
+      hint.taskId === item.id && hint.originalUri === item.originalUri);
+  }
+
+  // 只对已复制到本机的原图分析像素。异步结束后按会话、taskId 和图片 URI 核对，
+  // 防止用户切项、跳过或重新复制时，旧建议写到另一件衣物上。
+  private async recognizeImportColor(index: number): Promise<void> {
+    const item: ImportItem | undefined = this.importItems[index];
+    if (item === undefined || item.originalUri.length === 0 || this.recognizingImportTaskId.length > 0 ||
+      this.navigating() || this.readBlocked || item.phase === ImportPhase.SAVED ||
+      item.phase === ImportPhase.SKIPPED || isActivePhase(item.phase)) { return; }
+    const session: ImportSession = this.importSessionRef();
+    const taskId: string = item.id;
+    const originalUri: string = item.originalUri;
+    this.recognizingImportTaskId = taskId;
+    try {
+      const result: GarmentRecognition = await recognizeGarment(originalUri);
+      const current: ImportItem | undefined = session.find(taskId);
+      if (!this.alive || this.mainRoute !== 'garmentImport' || this.importCtl === undefined ||
+        this.importCtl.currentSession() !== session || current === undefined ||
+        current.originalUri !== originalUri || current.phase === ImportPhase.SAVED ||
+        current.phase === ImportPhase.SKIPPED) { return; }
+      const usable: boolean = result.colorSource === RECOGNITION_SOURCE_PIXEL_COLOR && result.color.length > 0;
+      // 提示分来自像素投票，并非经过模型校准的概率。类别与材质没有视觉模型时留空。
+      const message: string = recognitionSummary(result);
+      const hint: ImportRecognitionHint = { taskId: taskId, originalUri: originalUri,
+        color: usable ? result.color : '', message: message };
+      this.importRecognitionHints = this.importRecognitionHints.filter((entry: ImportRecognitionHint) =>
+        entry.taskId !== taskId).concat([hint]);
+    } catch (error) {
+      const current: ImportItem | undefined = session.find(taskId);
+      if (this.alive && this.mainRoute === 'garmentImport' && current !== undefined &&
+        current.originalUri === originalUri) {
+        this.importRecognitionHints = this.importRecognitionHints.filter((entry: ImportRecognitionHint) =>
+          entry.taskId !== taskId).concat([{ taskId: taskId, originalUri: originalUri,
+            color: '', message: '图片分析未完成，请手动选色' }]);
+      }
+    } finally {
+      if (this.recognizingImportTaskId === taskId) { this.recognizingImportTaskId = ''; }
+    }
+  }
+
+  private useRecognizedColor(index: number): void {
+    const item: ImportItem | undefined = this.importItems[index];
+    if (item === undefined || isActivePhase(item.phase) || item.phase === ImportPhase.SAVED ||
+      item.phase === ImportPhase.SKIPPED) { return; }
+    const hint: ImportRecognitionHint | undefined = this.importRecognitionHints.find((entry: ImportRecognitionHint) =>
+      entry.taskId === item.id && entry.originalUri === item.originalUri);
+    if (hint === undefined || hint.color.length === 0) { return; }
+    this.importColor(index, hint.color);
   }
 
   // 原图/抠图切换只作用于当前项，不动其它任务。
@@ -908,9 +1086,11 @@ struct Index {
     }
     const candidate: Garment = {
       id: item.garmentId, name: item.draft.name.trim(), category: CATEGORIES[item.draft.categoryIndex],
+      subcategory: (item.draft.subcategory || '').trim(), material: (item.draft.material || '').trim(),
       imageKey: '', imageUri: activeImportImage(item), color: item.draft.color,
       minTemp: item.draft.minTemp, maxTemp: item.draft.maxTemp, occasions: item.draft.occasions.slice(),
-      status: GarmentStatus.READY, wearCount: 0, isDemo: false,
+      // 用户仍要确认全部属性；来源于安装包的照片继续标为示例，不冒充用户自己的衣物。
+      status: GarmentStatus.READY, wearCount: 0, isDemo: bundledPhotoId(item.sourceUri).length > 0,
       // 导入衣物在用户确认前保持中性偏好属性，不猜版型和风格。
       fit: '合身', palette: '基础色', style: '简约', layering: false, pattern: false
     };
@@ -1051,6 +1231,7 @@ struct Index {
     this.importExitDialogOpen = false;
     this.invalidateRetry();
     const saved: number = this.importController().exit();
+    this.importRecognitionHints = [];
     this.importItems = [];
     this.importIndex = 0;
     if (saved > 0) {
@@ -1139,24 +1320,56 @@ struct Index {
   private cityName(): string { return this.city.length > 0 ? this.city : '未选择城市'; }
 
   // 应用城市与温度：温度直接决定推荐候选，所以两者一起提交。
-  private applyCity(city: CityOption, temperature: number): void {
-    if (this.businessBusy()) { return; }
+  private async applyCity(city: CityOption, temperature: number): Promise<void> {
+    if (this.readBlocked || !this.repository) { this.toast('本地数据不可写，请先恢复衣橱'); return; }
+    if (this.businessBusy() || !Number.isFinite(temperature) || temperature < -20 || temperature > 45) { return; }
     this.invalidateRetry();
+    // 手动切城后，先前发起的天气请求不能再覆盖用户选择。
     this.weatherRequest += 1;
-    this.city = city.name;
-    WeatherService.setManualCity(city);
-    // 手动切城立即清掉旧城市的天气，不能把旧实测数据标到新城市名下。
-    this.weather = { available: false, city: city.name, condition: '', tempMin: 0, tempMax: 0, source: '手动温度' };
-    if (temperature >= 5 && temperature <= 35) { this.temperature = temperature; }
-    this.showSheet = false;
-    this.regenerate(); this.persist();
-    this.toast('已切换到' + city.name);
+    const nextRequest: OutfitRequest = this.request();
+    nextRequest.temperature = temperature;
+    const preview: Recommendation = recommend(this.garments, nextRequest);
+    const nextActiveIds: string[] = preview.outfits.length > 0 ? preview.outfits[0].garmentIds.slice() : [];
+    const base: DemoSnapshot = this.snapshot();
+    const candidate: DemoSnapshot = { version: base.version, garments: base.garments, saved: base.saved,
+      records: base.records, occasion: base.occasion, temperature: temperature, activeIds: nextActiveIds,
+      profile: base.profile, diary: base.diary, tryOnTasks: base.tryOnTasks,
+      membership: base.membership, body: base.body, city: city.name };
+    await this.commit(candidate, () => {
+      this.city = city.name;
+      this.temperature = temperature;
+      this.activeIds = nextActiveIds;
+      WeatherService.setManualCity(city);
+      // 手动切城后清掉旧城市的实测天气，避免把旧数据标到新城市名下。
+      this.weather = { available: false, city: city.name, condition: '', tempMin: 0,
+        tempMax: 0, source: '手动温度' };
+      this.regenerate();
+    }, () => {
+      this.showSheet = false;
+      this.refreshCard();
+      this.toast('已切换到' + city.name);
+    }, () => { this.applyCity(city, temperature).catch(() => {}); });
   }
 
-  private saveBodyProfile(): void {
-    if (this.businessBusy()) { return; }
+  private async saveBodyProfile(next: BodyProfile): Promise<void> {
+    if (this.readBlocked || !this.repository) { throw new Error('本地数据不可写'); }
+    if (this.businessBusy()) { throw new Error('正在保存上一项，请稍候'); }
     this.invalidateRetry();
-    this.persist(); this.showSheet = false; this.toast('已保存身材与色彩档案');
+    const nextRequest: OutfitRequest = this.request();
+    nextRequest.body = next;
+    const preview: Recommendation = recommend(this.garments, nextRequest);
+    const nextActiveIds: string[] = preview.outfits.length > 0 ? preview.outfits[0].garmentIds.slice() : [];
+    const candidate: DemoSnapshot = this.withBody(next, nextActiveIds);
+    const saved: boolean = await this.commit(candidate, () => {
+      this.body = next;
+      this.activeIds = nextActiveIds;
+      this.regenerate();
+    }, () => {
+      this.showSheet = false;
+      this.refreshCard();
+      this.toast('档案已保存，推荐已更新');
+    }, () => { this.saveBodyProfile(next).catch(() => {}); });
+    if (!saved) { throw new Error('档案尚未保存到本机，请检查存储空间后重试'); }
   }
 
   // DIY 与详情里保存方案：同一 id 视为更新，避免重复堆叠。
@@ -1311,6 +1524,7 @@ struct Index {
     const changed: Garment = copyGarment(this.selectedItem);
     const obsoleteImage: string = this.draft.uri.length > 0 ? changed.imageUri : '';
     changed.name = this.draft.name.trim(); changed.category = CATEGORIES[this.draft.categoryIndex];
+    if (changed.category !== this.selectedItem.category) { changed.subcategory = ''; }
     changed.color = this.draft.color; changed.minTemp = this.draft.minTemp; changed.maxTemp = this.draft.maxTemp;
     changed.occasions = this.draft.occasions.slice();
     if (this.draft.uri.length > 0) {
@@ -1370,7 +1584,7 @@ struct Index {
     // 抠图输出同样使用本应用批量文件前缀，必须服从启动清理门禁。
     if (!this.sweepDone) { this.toast('正在整理本机文件，请稍候再试'); return; }
     if (!cutoutSupported()) {
-      this.draft.error = '当前设备不支持主体抠图，可继续使用原图'; this.toast(this.draft.error); return;
+      this.draft.error = '暂时无法抠图，可继续使用原图'; this.toast(this.draft.error); return;
     }
     if (this.cutoutDraftUri.length > 0) {
       this.invalidateRetry(); this.draft.uri = this.cutoutDraftUri; return;
@@ -1456,6 +1670,97 @@ struct Index {
         parameters: { 'ohos.extra.param.key.form_dimension': 2, 'ohos.extra.param.key.form_name': 'TodayOutfit',
           'ohos.extra.param.key.module_name': 'entry' } });
     } catch (error) { this.toast('当前系统未能打开卡片管理，请从桌面应用图标添加服务卡片'); }
+  }
+
+  // 这是用户主动操作的离线文件迁移，不代表手机和平板已经建立自动同步连接。
+  // Picker 打开期间冻结本地修改；卡片唤起与天气更新由既有提交锁延后处理。
+  private async exportMigration(): Promise<void> {
+    if (this.readBlocked || !this.repository) { throw new Error('本地数据不可读取，暂不能导出'); }
+    if (this.navigating()) { throw new Error('正在保存上一项，请稍候再导出'); }
+    if (!this.sweepDone) { throw new Error('正在整理本机文件，请稍候再导出'); }
+    this.migrationBusy = true;
+    try {
+      const result: MigrationPickerResult<string> = await exportWardrobeMigrationWithPicker(
+        this.context(), this.snapshot(), 'manual-export-' + String(Date.now()), 0);
+      if (result.status !== 'saved') { throw new Error(result.message); }
+    } finally {
+      this.migrationBusy = false;
+      this.afterPublish();
+    }
+  }
+
+  private async importMigration(): Promise<void> {
+    if (!this.repository) { throw new Error('本地存储尚未就绪'); }
+    if (this.navigating()) { throw new Error('正在保存上一项，请稍候再导入'); }
+    if (!this.sweepDone && !this.readBlocked) { throw new Error('正在整理本机文件，请稍候再导入'); }
+    this.migrationBusy = true;
+    let imported: boolean = false;
+    try {
+      const picked: MigrationPickerResult<string> = await selectMigrationPackageWithPicker(this.context());
+      if (picked.status !== 'selected' || picked.value === undefined) { throw new Error(picked.message); }
+      // 从确认文件开始，旧城市的在途天气不得再写进即将导入的快照。
+      // 选择器取消时不触碰待处理温度，仍由 finally 走正常补存。
+      this.weatherRequest += 1;
+      this.commitLock.takeTemperature();
+      const target = createCoreFileMigrationTargetAdapter(this.context().filesDir);
+      // 手动迁移没有后台 revision 服务。当前本机快照按 revision 0 比较；
+      // 同版本且内容不同会要求用户再确认，而不是以时间戳自动覆盖本机衣橱。
+      const local: SyncEnvelope<DemoSnapshot> | undefined = this.readBlocked ? undefined :
+        createSyncEnvelope(this.snapshot(), 'local-wardrobe', 0);
+      const prepared: MigrationPreparationResult<DemoSnapshot> = await prepareWardrobeMigration(
+        picked.value, target, local);
+      if (prepared.status === 'rejected' || prepared.status === 'stale' ||
+        prepared.status === 'duplicate' || prepared.candidate === undefined) {
+        throw new Error(prepared.message);
+      }
+      if (prepared.status === 'conflict') {
+        const answer = await this.getUIContext().getPromptAction().showDialog({
+          title: '确认覆盖当前衣橱？',
+          message: '迁移文件与本机衣橱内容不同。导入后，本机衣物、收藏、日记和试穿记录会以文件内容为准。',
+          buttons: [{ text: '保留本机', color: $r('app.color.text_secondary') },
+            { text: '覆盖导入', color: $r('app.color.warning') }]
+        });
+        if (answer.index !== 1) { throw new Error('已取消导入，当前衣橱未改变'); }
+      }
+      const candidate: WardrobeMigrationCandidate<DemoSnapshot> = prepared.candidate;
+      await commitWardrobeMigrationCandidate(candidate, target, {
+        validate: (snapshot: DemoSnapshot) => {
+          const payload: string = JSON.stringify(snapshot);
+          if (new util.TextEncoder().encodeInto(payload).byteLength > 2 * 1024 * 1024) {
+            throw new Error('导入后的衣橱快照超过本机容量上限');
+          }
+          validateSnapshot(snapshot);
+        },
+        commit: (snapshot: DemoSnapshot) => this.repository ? this.repository.save(snapshot) :
+          Promise.reject(new Error('本地存储尚未就绪')),
+        publish: (snapshot: DemoSnapshot) => {
+          this.invalidateRetry();
+          this.readBlocked = false;
+          this.lockedIds = [];
+          this.excludedIds = [];
+          this.restore(snapshot);
+          this.weather = { available: false, city: this.city, condition: '', tempMin: 0,
+            tempMax: 0, source: '手动温度' };
+          this.showSheet = false;
+          this.refreshCard();
+        }
+      }, prepared.status === 'conflict');
+      imported = true;
+      // 只按仓储允许的批量文件前缀清理。目标适配器同样使用该前缀；
+      // referencedImages 会保护刚发布快照仍在使用的图片。
+      try {
+        await this.repository.sweepOrphans(this.snapshot());
+        // 只读恢复启动时尚未做过清理；这次已在迁移锁内完成，不再启动第二轮异步清理。
+        this.orphanSwept = true;
+        this.sweepDone = true;
+      } catch (error) {
+        hilog.warn(0x1200, 'YiDa', 'Migration orphan sweep failed');
+      }
+    } finally {
+      this.migrationBusy = false;
+      this.afterPublish();
+      if (imported) { this.refreshWeather(); }
+    }
   }
 
   private openQuiz(): void {
@@ -1577,11 +1882,13 @@ struct Index {
       }.width('100%')
       // 关闭滑块气泡提示：气泡浮在滑轨上方会盖住天气说明，且出现/消失会让版面上下抖动。
       // 温度本身已用大字号实时显示，拖动时同样可见。
-      Slider({ value: this.temperature, min: 5, max: 35, step: 1 }).selectedColor(Theme.accent)
+      Slider({ value: this.temperature, min: -20, max: 45, step: 1 }).selectedColor(Theme.accent)
         .onChange((value: number, mode: SliderChangeMode) => {
           if (this.businessBusy()) { return; }
           this.temperature = Math.round(value); this.regenerate();
           if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+            // 用户手调温度优先于尚在途的天气结果。
+            this.weatherRequest += 1;
             this.invalidateRetry(); this.persist();
           }
         }).accessibilityText('天气温度')
@@ -1677,7 +1984,7 @@ struct Index {
     HomePage({
       garmentCount: this.garments.length,
       todayRecorded: this.todayRecorded(),
-      city: this.cityName(),
+      city: this.weather.available && this.weather.city.length > 0 ? this.weather.city : this.cityName(),
       weather: this.weather.available ? this.weather.condition : '手动天气',
       tempMin: this.weather.available ? this.weather.tempMin : this.temperature,
       tempMax: this.weather.available ? this.weather.tempMax : this.temperature,
@@ -1717,7 +2024,13 @@ struct Index {
           garmentCount: this.garments.length,
           readBlocked: this.readBlocked,
           busy: this.commitInFlight,
+          recognitionMessage: this.importRecognitionHint()?.message || '',
+          recognitionColor: this.importRecognitionHint()?.color || '',
+          recognitionBusy: this.recognizingImportTaskId.length > 0,
+          onRecognize: (index: number) => { this.recognizeImportColor(index); },
+          onUseRecognition: (index: number) => { this.useRecognizedColor(index); },
           onPick: () => { this.pickImportPhotos(); },
+          onSample: (id: string) => { this.pickImportSample(id); },
           onSelect: (index: number) => { this.importMove(index); },
           onMove: (index: number) => { this.importMove(index); },
           onConfirm: (index: number) => { this.importConfirm(index); },
@@ -1727,6 +2040,8 @@ struct Index {
           onOriginal: (index: number) => { this.importUseOriginal(index); },
           onName: (index: number, value: string) => { this.importName(index, value); },
           onCategory: (index: number, value: number) => { this.importCategory(index, value); },
+          onSubcategory: (index: number, value: string) => { this.importSubcategory(index, value); },
+          onMaterial: (index: number, value: string) => { this.importMaterial(index, value); },
           onColor: (index: number, value: string) => { this.importColor(index, value); },
           onMinTemp: (index: number, value: number) => { this.importMinTemp(index, value); },
           onMaxTemp: (index: number, value: number) => { this.importMaxTemp(index, value); },
@@ -1886,6 +2201,7 @@ struct Index {
       onClaimTrial: () => { this.claimTrial(); },
       onOpenTryOn: (sceneId?: string) => { this.openTryOn(sceneId); },
       onOpenCardManager: () => { this.openCardManager(); },
+      onOpenTransfer: () => { this.openSheet('transfer'); },
       onReset: () => { this.resetDemo(); }
     })
   }
@@ -2052,6 +2368,11 @@ struct Index {
         .backgroundColor(Theme.imagePlaceholder).borderRadius(Theme.radiusCard)
       Text(this.selectedItem.category + ' · ' + this.selectedItem.color + ' · ' + this.selectedItem.minTemp +
         ' – ' + this.selectedItem.maxTemp + '℃').fontSize(Type.bodySmall).fontColor(Theme.secondary).width('100%')
+      if ((this.selectedItem.subcategory || '').length > 0 || (this.selectedItem.material || '').length > 0) {
+        Text([this.selectedItem.subcategory || '', this.selectedItem.material || '']
+          .filter((value: string) => value.length > 0).join(' · '))
+          .fontSize(Type.caption).fontColor(Theme.secondary).width('100%').maxLines(2)
+      }
       Text('已穿 ' + this.selectedItem.wearCount + ' 次 · ' + this.selectedItem.occasions.join('、'))
         .fontSize(Type.caption).fontColor(Theme.secondary).width('100%')
       Button('编辑衣物', { type: ButtonType.Normal }).width('100%').height(Theme.buttonHeight)
@@ -2123,12 +2444,16 @@ struct Index {
         if (this.sheet === 'detail') { this.detailSheet() }
         else if (this.sheet === 'add') { this.addSheetBody() }
         else if (this.sheet === 'quiz') { this.quizSheet() }
-        else if (this.sheet === 'body') { BodyProfileSheet({ body: this.body, onSave: () => this.saveBodyProfile() }) }
+        else if (this.sheet === 'body') { BodyProfileSheet({ body: this.body,
+          onSave: (draft: BodyProfile) => this.saveBodyProfile(draft) }) }
+        else if (this.sheet === 'transfer') { SyncTransferSheet({
+          onExport: () => this.exportMigration(),
+          onImport: () => this.importMigration() }) }
         else if (this.sheet === 'city') {
           CityPickerSheet({ currentCity: this.city, currentTemperature: this.temperature,
             weatherAvailable: this.weather.available, weatherSource: this.weather.source,
             onPick: (city: CityOption, temperature: number) => this.applyCity(city, temperature),
-            onUseLocation: () => this.refreshWeather() })
+            onUseLocation: () => { this.refreshWeatherAtLocation(); } })
         }
         else { this.feedbackSheet() }
       }.width('100%').constraintSize({ maxWidth: CONTENT_MAX_WIDTH })

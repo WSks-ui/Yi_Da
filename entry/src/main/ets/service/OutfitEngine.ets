@@ -1,4 +1,29 @@
 import { Category, Garment, GarmentStatus, Outfit, OutfitRequest, PreferenceProfile, Recommendation } from '../model/Wardrobe';
+import { analyzeBodyProfile, BodyAnalysisResult, bodyFitScore } from './BodyAnalysis';
+
+// 允许页面显式传入已计算结果；不传时从请求里的身材档案计算，旧调用继续走空分析。
+export { bodyFitScore } from './BodyAnalysis';
+
+function resolveBodyAnalysis(request: OutfitRequest, provided?: BodyAnalysisResult): BodyAnalysisResult {
+  if (provided !== undefined) { return provided; }
+  if (request.body !== undefined) { return analyzeBodyProfile(request.body); }
+  if (request.profile.body !== undefined) { return analyzeBodyProfile(request.profile.body); }
+  return analyzeBodyProfile(undefined);
+}
+
+function bodyReason(analysis: BodyAnalysisResult): string {
+  if (analysis.confidence <= 0 || analysis.knownFields.length === 0) { return ''; }
+  const summary: string = analysis.summary.trim();
+  const advice: string = (analysis.recommendationSummary || '').trim();
+  if (summary.length > 0 && advice.length > 0 && summary !== advice) { return summary + advice; }
+  return summary.length > 0 ? summary : advice;
+}
+
+function rankingContext(request: OutfitRequest, candidates: Garment[]): Outfit {
+  return { id: 'ranking_context', garmentIds: candidates.map((item: Garment) => item.id),
+    occasion: request.occasion, temperature: request.temperature, reason: '', name: '',
+    isCustom: false, savedAt: '' };
+}
 
 export function eligible(item: Garment, request: OutfitRequest): boolean {
   return item.status === GarmentStatus.READY && request.excludedIds.indexOf(item.id) < 0 &&
@@ -24,16 +49,19 @@ export function preferenceScore(item: Garment, profile: PreferenceProfile): numb
   return score;
 }
 
-export function makeOutfit(items: Garment[], request: OutfitRequest, profile: PreferenceProfile): Outfit {
+export function makeOutfit(items: Garment[], request: OutfitRequest, profile: PreferenceProfile,
+  analysis?: BodyAnalysisResult): Outfit {
   const ids: string[] = items.map((item: Garment) => item.id);
   const hasOuter: boolean = items.some((item: Garment) => item.category === Category.OUTER);
   const matched: number = items.filter((item: Garment) => preferenceScore(item, profile) > 0).length;
+  const bodyText: string = bodyReason(analysis === undefined ? resolveBodyAnalysis(request) : analysis);
   return {
     id: ids.join('_') + '_' + request.occasion + '_' + request.temperature,
     garmentIds: ids, occasion: request.occasion, temperature: request.temperature,
     reason: `${request.temperature}℃ · ${request.occasion}，${items.length} 件衣物均为可穿状态，且符合已确认的温度与场合条件。` +
       (hasOuter ? '加入外套应对偏凉天气。' : '轻装出门，减少不必要的叠穿。') +
-      (profile.completed ? `其中 ${matched} 件与你的偏好档案相符。` : ''),
+      (profile.completed ? `其中 ${matched} 件与你的偏好档案相符。` : '') +
+      (bodyText.length > 0 ? `体型建议：${bodyText}` : ''),
     name: '', isCustom: false, savedAt: ''
   };
 }
@@ -62,11 +90,13 @@ export function customOutfit(items: Garment[], request: OutfitRequest, name: str
   };
 }
 
-export function recommend(garments: Garment[], request: OutfitRequest): Recommendation {
+export function recommend(garments: Garment[], request: OutfitRequest,
+  providedBodyAnalysis?: BodyAnalysisResult): Recommendation {
   if (!Number.isFinite(request.temperature) || request.temperature < -20 || request.temperature > 45) {
     return { outfits: [], explanation: '请将温度设置在 -20 至 45℃ 之间。' };
   }
   const profile: PreferenceProfile = request.profile;
+  const analysis: BodyAnalysisResult = resolveBodyAnalysis(request, providedBodyAnalysis);
   const locked: Garment[] = [];
   for (const id of request.lockedIds) {
     const item: Garment | undefined = garments.find((entry: Garment) => entry.id === id);
@@ -89,10 +119,13 @@ export function recommend(garments: Garment[], request: OutfitRequest): Recommen
     const fixed: Garment | undefined = locked.find((item: Garment) => item.category === category);
     const candidates: Garment[] = fixed ? [fixed] : garments.filter((item: Garment) =>
       item.category === category && eligible(item, request));
-    // 先按偏好匹配度，再按穿着次数：偏好只影响顺序，不会让某件衣物变得不可选。
+    const context: Outfit = rankingContext(request, candidates);
+    // 先按偏好与体型软分数，再按穿着次数；软分数只影响顺序，不会让衣物变得不可选。
     candidates.sort((left: Garment, right: Garment) => {
-      const byPreference: number = preferenceScore(right, profile) - preferenceScore(left, profile);
-      return byPreference !== 0 ? byPreference : left.wearCount - right.wearCount;
+      const rightScore: number = preferenceScore(right, profile) + bodyFitScore(right, context, analysis);
+      const leftScore: number = preferenceScore(left, profile) + bodyFitScore(left, context, analysis);
+      const byScore: number = rightScore - leftScore;
+      return byScore !== 0 ? byScore : left.wearCount - right.wearCount;
     });
     if (candidates.length === 0) {
       return { outfits: [], explanation: `${request.temperature}℃、${request.occasion}场景缺少可穿的${category}。请补充衣物、恢复状态或调整条件。` };
@@ -109,7 +142,7 @@ export function recommend(garments: Garment[], request: OutfitRequest): Recommen
       cursor = Math.floor(cursor / pool.length);
     }
     if (cursor > 0) { break; }
-    outfits.push(makeOutfit(selected, request, profile));
+    outfits.push(makeOutfit(selected, request, profile, analysis));
   }
   return { outfits: outfits, explanation: '' };
 }
@@ -121,13 +154,18 @@ export function replaceGarment(outfit: Outfit, itemId: string, garments: Garment
   const alternatives: Garment[] = garments.filter((item: Garment) => item.category === old.category &&
     item.id !== old.id && eligible(item, request));
   if (alternatives.length === 0) { return { outfits: [], explanation: `没有符合条件的其他${old.category}，已保留原搭配。` }; }
-  alternatives.sort((left: Garment, right: Garment) =>
-    preferenceScore(right, request.profile) - preferenceScore(left, request.profile));
+  const analysis: BodyAnalysisResult = resolveBodyAnalysis(request);
+  alternatives.sort((left: Garment, right: Garment) => {
+    const rightScore: number = preferenceScore(right, request.profile) + bodyFitScore(right, outfit, analysis);
+    const leftScore: number = preferenceScore(left, request.profile) + bodyFitScore(left, outfit, analysis);
+    const byScore: number = rightScore - leftScore;
+    return byScore !== 0 ? byScore : left.wearCount - right.wearCount;
+  });
   const chosen: Garment[] = [];
   for (const id of outfit.garmentIds) {
     const item: Garment | undefined = id === old.id ? alternatives[0] : garments.find((entry: Garment) => entry.id === id);
     if (!item || !eligible(item, request)) { return { outfits: [], explanation: '搭配中的衣物状态已变化，请重新生成。' }; }
     chosen.push(item);
   }
-  return { outfits: [makeOutfit(chosen, request, request.profile)], explanation: '' };
+  return { outfits: [makeOutfit(chosen, request, request.profile, analysis)], explanation: '' };
 }

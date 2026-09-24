@@ -29,15 +29,6 @@ export class MaterialSupport {
     return MaterialSupport.supported;
   }
 
-  static level(): string {
-    try {
-      switch (uiMaterial.getGlobalMaterialLevel()) {
-        case uiMaterial.MaterialLevel.EXQUISITE: return 'EXQUISITE';
-        case uiMaterial.MaterialLevel.GENTLE: return 'GENTLE';
-        default: return 'SMOOTH';
-      }
-    } catch (error) { return 'unknown'; }
-  }
 }
 
 // 材质层着色必须带透明度：完全不透明会把材质滤镜整个挡住。
@@ -508,22 +499,4 @@ export class HdsMaterialSupport {
       : hdsMaterial.MaterialLevel.ADAPTIVE;
   }
 
-  static summary(): string {
-    HdsMaterialSupport.load();
-    return HdsMaterialSupport.types.length > 0
-      ? HdsMaterialSupport.types.join(' / ')
-      : '不可用';
-  }
-}
-
-// 「我的」页的能力自检文案：把设备实际支持的材质类型写出来，便于现场核对。
-export function hdsMaterialReport(): string {
-  const hds: string = HdsMaterialSupport.summary();
-  const low: string = MaterialSupport.isSupported()
-    ? 'uiMaterial 可用 · 等级 ' + MaterialSupport.level()
-    : 'uiMaterial 不可用';
-  const chosen: string = HdsMaterialSupport.supportsImmersive()
-    ? '底部页签使用 HdsTabs + IMMERSIVE/EXQUISITE'
-    : '本机不支持 IMMERSIVE，页签已降级为自适应材质';
-  return 'HDS 材质：' + hds + '\n' + low + '\n' + chosen;
 }

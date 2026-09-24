@@ -13,11 +13,7 @@ struct TodayCard {
 
   build() {
     Column({ space: 6 }) {
-      Row() {
-        Text('艺起搭').fontSize(13).fontWeight(FontWeight.Bold).fontColor('#202027')
-        Blank()
-        Text('演示').fontSize(10).fontColor('#287A66')
-      }.width('100%')
+      Text('艺起搭').fontSize(13).fontWeight(FontWeight.Bold).fontColor('#202027').width('100%')
       if (this.imageKey.length > 0) {
         Image(cardImage(this.imageKey)).layoutWeight(1).width('100%').objectFit(ImageFit.Contain)
           .onClick(() => postCardAction(this, { action: 'message', params: { message: 'expand' } }))

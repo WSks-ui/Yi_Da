@@ -15,6 +15,7 @@ require.extensions['.ets'] = (loadedModule, filename) => {
 const { Category, GarmentStatus, STATUSES, emptyProfile } = require('../entry/src/main/ets/model/Wardrobe.ets');
 const { demoGarments, initialSnapshot } = require('../entry/src/main/ets/data/DemoData.ets');
 const { recommend, replaceGarment } = require('../entry/src/main/ets/service/OutfitEngine.ets');
+const { analyzeBodyProfile, bodyFitScore } = require('../entry/src/main/ets/service/BodyAnalysis.ets');
 const { activeGarments, cardData } = require('../entry/src/main/ets/widget/CardData.ets');
 const { localDay, normalizedDay, recordedDays, hasWear } = require('../entry/src/main/ets/service/WearHistory.ets');
 const { temperatureAdvice, precipitationAdvice, TEMPERATURE_BANDS } = require('../entry/src/main/ets/service/TemperatureAdvice.ets');
@@ -269,6 +270,60 @@ test('未完成档案时推荐理由不声称匹配偏好', () => {
   assert.equal(done.outfits[0].reason.includes('偏好档案'), true);
 });
 
+test('空体型档案保持中性，不改变旧调用排序', () => {
+  const emptyBody = { height: '', size: '', fitPreference: '', shoulder: '', chest: '', waist: '', hip: '',
+    skinTone: '', hairColor: '', eyeColor: '', updatedAt: '' };
+  const analysis = analyzeBodyProfile(emptyBody);
+  assert.equal(analysis.shape, '信息不足');
+  assert.deepEqual(analysis.knownFields, []);
+  assert.equal(analysis.confidence, 0);
+  const request = query();
+  const oldResult = recommend(demoGarments(), request);
+  const bodyResult = recommend(demoGarments(), Object.assign({}, request, { body: emptyBody }));
+  assert.deepEqual(bodyResult.outfits.map(item => item.garmentIds), oldResult.outfits.map(item => item.garmentIds));
+  assert.equal(bodyFitScore(demoGarments()[0], oldResult.outfits[0], analysis), 0);
+});
+
+test('肩宽缺少胸围时不做围度替代，无效数字不计入已知字段', () => {
+  const partialBody = { height: '170x', size: '', fitPreference: '', shoulder: '40', chest: 'abc', waist: '72x',
+    hip: '94', skinTone: '', hairColor: '', eyeColor: '', updatedAt: '' };
+  const analysis = analyzeBodyProfile(partialBody);
+  assert.equal(analysis.shape, '信息不足');
+  assert.deepEqual(analysis.knownFields, ['shoulder', 'hip']);
+  assert.equal(analysis.confidence, 0.33);
+  assert.equal(analysis.knownFields.indexOf('height'), -1);
+  assert.equal(analysis.knownFields.indexOf('chest'), -1);
+  assert.equal(analysis.knownFields.indexOf('waist'), -1);
+
+  const shoulderOnly = Object.assign({}, partialBody, { height: '', chest: '', waist: '', hip: '94' });
+  assert.equal(analyzeBodyProfile(shoulderOnly).shape, '信息不足');
+});
+
+test('完整体型档案给出可解释标签、建议和排序影响', () => {
+  const fullBody = { height: '170', size: 'M', fitPreference: '合身', shoulder: '40', chest: '88', waist: '72',
+    hip: '94', skinTone: '', hairColor: '', eyeColor: '', updatedAt: '' };
+  const analysis = analyzeBodyProfile(fullBody);
+  assert.equal(analysis.shape, '沙漏型');
+  assert.equal(analysis.confidence, 1);
+  assert.equal(analysis.knownFields.length, 6);
+  assert.match(analysis.summary, /沙漏型/);
+  assert.ok(analysis.advice.length > 0);
+  const result = recommend(demoGarments(), Object.assign({}, query(), { body: fullBody }));
+  assert.match(result.outfits[0].reason, /体型建议/);
+  assert.match(result.outfits[0].reason, /沙漏型/);
+  assert.equal(result.outfits[0].garmentIds.includes('tee'), true);
+});
+
+test('体型推荐排序可重复，且支持从 profile.body 兼容接入', () => {
+  const body = { height: '170', size: '', fitPreference: '宽松', shoulder: '42', chest: '96', waist: '82',
+    hip: '90', skinTone: '', hairColor: '', eyeColor: '', updatedAt: '' };
+  const request = query({ profile: Object.assign({}, emptyProfile(), { body: body }) });
+  const first = recommend(demoGarments(), request);
+  const second = recommend(demoGarments(), request);
+  assert.deepEqual(first, second);
+  assert.match(first.outfits[0].reason, /体型建议/);
+});
+
 // ---- 温度带提示 ----
 
 test('温度带按上界升序排列，且覆盖到极端温度都有结果', () => {
@@ -358,6 +413,21 @@ test('A02 同一次选择按 URI 精确去重，取消选择不产生任务', ()
   const items = [];
   assert.equal(GI.summaryOf(items).total, 0);
   assert.equal(GI.hasUnfinished(items), false);
+});
+
+test('批量录入细类与材质跨字段编辑保持独立，切换大类清掉旧细类', () => {
+  let items = [createImportItem('fine-1', 'g-fine-1', 'u1'), createImportItem('fine-2', 'g-fine-2', 'u2')];
+  items = GI.applyCategory(items, 'fine-1', 0);
+  items = GI.applyDraft(items, 'fine-1', { subcategory: '连帽衫', material: '棉' });
+  items = GI.applyMinTemp(items, 'fine-1', 10);
+  items = GI.applyDraft(items, 'fine-1', { color: '蓝色' });
+  assert.equal(items[0].draft.subcategory, '连帽衫');
+  assert.equal(items[0].draft.material, '棉');
+  assert.equal(items[1].draft.subcategory, '');
+  assert.equal(items[1].draft.material, '');
+  items = GI.applyCategory(items, 'fine-1', 2);
+  assert.equal(items[0].draft.subcategory, '');
+  assert.equal(items[0].draft.material, '棉');
 });
 
 test('A03 一项拷贝失败不影响其它项，失败项可重试或跳过', () => {
@@ -735,6 +805,25 @@ test('A10 真实导入链：容量不足时选图前就不发起，且按剩余�
   assert.equal(full.items.length, 0);
 });
 
+test('真实导入链：追加示例或相册照片不能突破本次 10 张上限', async () => {
+  const harness = makeHost({ uris: ['u1', 'u2', 'u3', 'u4', 'u5', 'u6', 'u7', 'u8'] });
+  const session = ImportSession.create(1758000000020, 8);
+  assert.equal(await session.pick(harness.host, 0), 8);
+  assert.equal(session.capacity(0), 2);
+  let pickCalls = 0;
+  harness.host.pick = (limit) => {
+    pickCalls++;
+    assert.equal(limit, 2);
+    return Promise.resolve(['u9', 'u10', 'u11']);
+  };
+  assert.equal(await session.pick(harness.host, 0), 2, '系统选择器超额返回时仍只接收剩余额度');
+  assert.equal(session.items.length, 10);
+  assert.equal(session.capacity(0), 0);
+  assert.equal(await session.pick(harness.host, 0), 0);
+  assert.equal(pickCalls, 1, '满额后不得再次打开选择器');
+  await settle(15);
+});
+
 function settle(times = 6) {
   // 复制与保存都是异步的，且至少经过一层 setTimeout + Promise 链；
   // 这里给足每轮 5ms，避免把"还没跑完"误判成失败。
@@ -745,3 +834,4 @@ function settle(times = 6) {
 
 // 页面回归测试使用 AST Probe，实际方法与生产 Index.ets 保持同一份源码。
 require('./check-index.cjs');
+require('./check-weather.cjs');

@@ -42,8 +42,14 @@ function withDefaults(snapshot: DemoSnapshot): DemoSnapshot {
 export function readSnapshot(filesDir: string): DemoSnapshot {
   const path: string = filesDir + FILE_NAME;
   if (!fs.accessSync(path)) { return initialSnapshot(); }
-  if (fs.statSync(path).size > 2 * 1024 * 1024) { throw new Error('衣橱数据超过演示版容量限制'); }
+  if (fs.statSync(path).size > 2 * 1024 * 1024) { throw new Error('衣橱数据超过本地容量限制'); }
   const snapshot: DemoSnapshot = JSON.parse(fs.readTextSync(path)) as DemoSnapshot;
+  return validateSnapshot(snapshot);
+}
+
+// 手动迁移与正常启动共用同一份结构校验。导入侧会先校验候选，
+// 成功后才写图片与快照；这里不能依赖文件读取来判断一个尚未落盘的候选。
+export function validateSnapshot(snapshot: DemoSnapshot): DemoSnapshot {
   if (snapshot.version !== 1 || !Array.isArray(snapshot.garments) || !Array.isArray(snapshot.saved) ||
     !Array.isArray(snapshot.records) || !Array.isArray(snapshot.activeIds) ||
     !Number.isFinite(snapshot.temperature) || snapshot.temperature < -20 || snapshot.temperature > 45 ||
@@ -52,6 +58,10 @@ export function readSnapshot(filesDir: string): DemoSnapshot {
   for (const item of snapshot.garments) {
     if (typeof item.id !== 'string' || knownIds.indexOf(item.id) >= 0 || typeof item.name !== 'string' ||
       typeof item.imageKey !== 'string' || typeof item.imageUri !== 'string' || typeof item.color !== 'string' ||
+      (item.subcategory !== undefined && typeof item.subcategory !== 'string') ||
+      (item.material !== undefined && typeof item.material !== 'string') ||
+      (typeof item.subcategory === 'string' && item.subcategory.length > 24) ||
+      (typeof item.material === 'string' && item.material.length > 24) ||
       CATEGORIES.indexOf(item.category) < 0 || STATUSES.indexOf(item.status) < 0 || !Array.isArray(item.occasions) ||
       !Number.isFinite(item.minTemp) || !Number.isFinite(item.maxTemp) || item.minTemp > item.maxTemp ||
       !Number.isFinite(item.wearCount) || item.wearCount < 0) { throw new Error('衣物数据格式不正确'); }

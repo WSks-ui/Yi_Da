@@ -25,6 +25,8 @@ export interface PreferenceProfile {
   accessories: number;
   priority: string;
   completed: boolean;
+  // 体型档案作为可选上下文保留在偏好档案中，旧快照和旧调用不需要补字段。
+  body?: BodyProfile;
 }
 
 export function emptyProfile(): PreferenceProfile {
@@ -35,6 +37,9 @@ export interface Garment {
   id: string;
   name: string;
   category: Category;
+  // 细类和材质由用户确认后保存；旧快照没有这两个可选字段时仍可正常读取。
+  subcategory?: string;
+  material?: string;
   imageKey: string;
   imageUri: string;
   color: string;
@@ -151,6 +156,8 @@ export interface OutfitRequest {
   lockedIds: string[];
   excludedIds: string[];
   profile: PreferenceProfile;
+  // 推荐入口可直接传入身材档案；未传时由推荐服务保持旧排序。
+  body?: BodyProfile;
 }
 
 export interface Recommendation {

@@ -14,7 +14,7 @@
 import { ImportFailureStep, ImportItem, ImportPhase } from '../model/GarmentImport';
 import { beginCopy, beginCutout, beginSave, copyFailed, copySucceeded, createImportItem, cutoutFailed,
   cutoutSucceeded, dedupeUris, isActivePhase, makeGarmentId, makeSessionId, makeTaskId, markSkipped,
-  nextPendingIndex, offsetFor, remainingCapacity, saveFailed, saveSucceeded, setUseCutout,
+  nextPendingIndex, offsetFor, remainingCapacity, IMPORT_SELECT_LIMIT, saveFailed, saveSucceeded, setUseCutout,
   writeBack } from './GarmentImport';
 
 // 平台操作。页面注入真实实现，业务检查注入可控替身，跑的是同一条链。
@@ -130,9 +130,9 @@ export class ImportSession {
   // 下一次拷贝应当在多少毫秒内没有新的拷贝启动（供检查串行性）。
   async pick(host: ImportHost, garmentCount: number): Promise<number> {
     if (this.disposed) { return 0; }
-    const capacity: number = remainingCapacity(garmentCount);
+    const capacity: number = this.capacity(garmentCount);
     if (capacity <= 0) { return 0; }
-    const uris: string[] = dedupeUris(await host.pick(capacity));
+    const uris: string[] = dedupeUris(await host.pick(capacity)).slice(0, capacity);
     if (this.disposed || !host.isAlive() || uris.length === 0) { return 0; }
     const offset: number = offsetFor(this.items, this.sessionId, uris.length);
     const created: ImportItem[] = uris.map((uri: string, i: number) =>
@@ -146,7 +146,10 @@ export class ImportSession {
     return created.length;
   }
 
-  capacity(garmentCount: number): number { return remainingCapacity(garmentCount); }
+  // 追加选择也属于同一次录入；已保存和已跳过项仍占本次 10 张的名额。
+  capacity(garmentCount: number): number {
+    return Math.max(0, Math.min(remainingCapacity(garmentCount), IMPORT_SELECT_LIMIT - this.items.length));
+  }
 
   busy(): boolean { return this.items.some((item: ImportItem) => isActivePhase(item.phase)); }
 
