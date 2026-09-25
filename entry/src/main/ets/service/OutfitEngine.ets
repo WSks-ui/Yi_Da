@@ -35,6 +35,11 @@ export function eligible(item: Garment, request: OutfitRequest): boolean {
 // 这正是设计文稿里“可修改的多个维度”，而不是把用户锁进一种风格。
 export function preferenceScore(item: Garment, profile: PreferenceProfile): number {
   let score: number = 0;
+  // 单件反馈只影响排序，不改变 eligible 的硬约束；绝不因为“多推荐”
+  // 把待洗、温度不合适或场合不符的衣物重新塞回方案。
+  const recommendationBias: number = item.recommendationBias === 1 ? 1 :
+    item.recommendationBias === -1 ? -1 : 0;
+  score += recommendationBias * 4;
   if (profile.fits.indexOf(item.fit) >= 0) { score += 2; }
   if (profile.palettes.indexOf(item.palette) >= 0) { score += 2; }
   if (profile.styles.indexOf(item.style) >= 0) { score += 2; }
@@ -113,7 +118,10 @@ export function recommend(garments: Garment[], request: OutfitRequest,
   if (request.temperature < 18 || locked.some((item: Garment) => item.category === Category.OUTER)) {
     categories.push(Category.OUTER);
   }
-  if (locked.some((item: Garment) => item.category === Category.ACCESSORY)) { categories.push(Category.ACCESSORY); }
+  // 配饰是可选增强：有符合条件的配饰就加入候选组合，没有配饰也不能让完整穿搭失败。
+  const lockedAccessory: Garment | undefined = locked.find((item: Garment) => item.category === Category.ACCESSORY);
+  if (lockedAccessory !== undefined || garments.some((item: Garment) =>
+    item.category === Category.ACCESSORY && eligible(item, request))) { categories.push(Category.ACCESSORY); }
   const pools: Garment[][] = [];
   for (const category of categories) {
     const fixed: Garment | undefined = locked.find((item: Garment) => item.category === category);

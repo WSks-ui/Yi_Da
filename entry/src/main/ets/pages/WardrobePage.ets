@@ -4,7 +4,7 @@
 // 1. 品类从下拉改成常驻标签行——衣物分类是最常用的筛选，两级下拉要多点两次。
 // 2. 状态从下拉改成横向药丸，且只保留"全部/可穿/待洗"三个高频项，其余进整理任务区。
 // 3. 增加紧凑/舒适两档视图：衣物多时大图翻找很慢，紧凑档能一屏看更多。
-import { Category, CATEGORIES, Garment, GarmentStatus, STATUSES, garmentImage } from '../model/Wardrobe';
+import { Category, CATEGORIES, Garment, GarmentStatus, STATUSES, SEASONS, garmentImage } from '../model/Wardrobe';
 import { Theme, Type } from '../components/Theme';
 import { MaterialCard, ChipTone, cardMaterial, panelMaterial } from '../components/MaterialKit';
 
@@ -16,10 +16,16 @@ export struct WardrobePage {
   @Link filterStatus: string;
   @Prop readBlocked: boolean = false;
   @State compact: boolean = false;
+  @State batchMode: boolean = false;
+  @State selectedIds: string[] = [];
+  @State batchSeason: string = '';
+  @State batchTag: string = '';
+  @State batchStatus: GarmentStatus = GarmentStatus.READY;
   onSearch: (value: string) => void = () => {};
   onAddGarment: () => void = () => {};
   onOpenItem: (item: Garment) => void = () => {};
   onSetStatus: (id: string, status: GarmentStatus) => void = () => {};
+  onBatchEdit: (ids: string[], status: GarmentStatus | undefined, season: string, tag: string) => void = () => {};
 
   private readyCount(): number {
     return this.garments.filter((item: Garment) => item.status === GarmentStatus.READY).length;
@@ -42,7 +48,8 @@ export struct WardrobePage {
       (this.filterCategory === '全部' || item.category === this.filterCategory) &&
       (this.filterStatus === '全部状态' || item.status === this.filterStatus) &&
       (keyword.length === 0 || item.name.indexOf(keyword) >= 0 || item.color.indexOf(keyword) >= 0 ||
-        (item.subcategory || '').indexOf(keyword) >= 0 || (item.material || '').indexOf(keyword) >= 0));
+        (item.subcategory || '').indexOf(keyword) >= 0 || (item.material || '').indexOf(keyword) >= 0 ||
+        (item.season || '').indexOf(keyword) >= 0 || (item.tags || []).some((tag: string) => tag.indexOf(keyword) >= 0)));
   }
 
   @Builder
@@ -215,16 +222,71 @@ export struct WardrobePage {
       Text(item.name).fontSize(Type.caption).fontWeight(FontWeight.Medium).fontColor(Theme.text)
         .maxLines(this.compact ? 1 : 2).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
       if (!this.compact) {
-        Text((item.subcategory || item.category) + ' · ' + item.wearCount + ' 次')
+        Text((item.subcategory || item.category) + ' · ' + (item.season || '未设季节') + ' · ' + item.wearCount + ' 次')
           .fontSize(Type.caption).fontColor(Theme.tertiary).maxLines(1).width('100%')
+        if ((item.tags || []).length > 0) {
+          Text((item.tags || []).slice(0, 2).join(' · ')).fontSize(Type.caption).fontColor(Theme.secondary)
+            .maxLines(1).width('100%')
+        }
       }
     }
       .padding(Theme.spaceS)
       .width('100%')
       .backgroundColor(Theme.surface)
       .borderRadius(Theme.radiusCard)
+      .border({ width: this.batchMode && this.selectedIds.indexOf(item.id) >= 0 ? 2 : 0,
+        color: Theme.accent, radius: Theme.radiusCard })
       .stateStyles({ pressed: { .opacity(Theme.pressedOpacity) } })
-      .onClick(() => this.onOpenItem(item))
+      .onClick(() => {
+        if (this.batchMode) {
+          this.selectedIds = this.selectedIds.indexOf(item.id) >= 0
+            ? this.selectedIds.filter((id: string) => id !== item.id)
+            : this.selectedIds.concat([item.id]);
+        } else { this.onOpenItem(item); }
+      })
+  }
+
+  @Builder
+  private batchBar() {
+    MaterialCard({ contentPadding: Theme.spaceM }) {
+      Column({ space: Theme.spaceS }) {
+        Row({ space: Theme.spaceS }) {
+          Text(`已选 ${this.selectedIds.length} 件`).fontSize(Type.bodySmall).fontColor(Theme.text).layoutWeight(1)
+          Button('全选当前', { type: ButtonType.Normal }).height(32).fontSize(Type.buttonSmall)
+            .borderRadius(Theme.radiusPill).backgroundColor(Theme.accentSoft).fontColor(Theme.accent)
+            .onClick(() => { this.selectedIds = this.filtered().map((item: Garment) => item.id); })
+          Button('退出', { type: ButtonType.Normal }).height(32).fontSize(Type.buttonSmall)
+            .borderRadius(Theme.radiusPill).backgroundColor(Theme.surfaceSoft).fontColor(Theme.secondary)
+            .onClick(() => { this.batchMode = false; this.selectedIds = []; })
+        }.width('100%')
+        Row({ space: Theme.spaceS }) {
+          Text('状态').fontSize(Type.caption).fontColor(Theme.secondary)
+          Select(STATUSES.map((value: GarmentStatus): SelectOption => { return { value: value }; }))
+            .value(this.batchStatus).layoutWeight(1)
+            .onSelect((index: number) => { this.batchStatus = STATUSES[index]; })
+        }.width('100%')
+        Text('季节（不修改或选择一个）').fontSize(Type.caption).fontColor(Theme.secondary).width('100%')
+        Flex({ wrap: FlexWrap.Wrap }) {
+          ForEach(['不修改'].concat(SEASONS), (season: string) => {
+            Text(season).fontSize(Type.caption)
+              .fontColor((season === '不修改' && this.batchSeason.length === 0) || season === this.batchSeason
+                ? Theme.accent : Theme.text)
+              .padding({ left: Theme.spaceM, right: Theme.spaceM, top: Theme.spaceXs, bottom: Theme.spaceXs })
+              .backgroundColor((season === '不修改' && this.batchSeason.length === 0) || season === this.batchSeason
+                ? Theme.accentSoft : Theme.surfaceSoft)
+              .borderRadius(Theme.radiusPill)
+              .onClick(() => { this.batchSeason = season === '不修改' ? '' : season; })
+          }, (season: string) => season)
+        }.width('100%')
+        TextInput({ text: this.batchTag, placeholder: '新增标签，例如：常穿、通勤；留空不修改' }).height(40)
+          .fontSize(Type.caption).backgroundColor(Theme.surfaceSoft).borderRadius(Theme.radiusInput)
+          .onChange((value: string) => this.batchTag = value)
+        Button('应用到已选衣物', { type: ButtonType.Normal }).width('100%').height(40)
+          .borderRadius(Theme.radiusPill).backgroundColor(Theme.accent).fontColor(Theme.onAccent)
+          .enabled(this.selectedIds.length > 0 && !this.readBlocked)
+          .onClick(() => this.onBatchEdit(this.selectedIds, this.batchStatus, this.batchSeason, this.batchTag.trim()))
+      }.width('100%')
+    }
   }
 
   @Builder
@@ -259,7 +321,14 @@ export struct WardrobePage {
           .fontColor(Theme.text).maxLines(1)
         Text('按品类和状态整理，常穿的会排在推荐前面')
           .fontSize(Type.caption).fontColor(Theme.secondary).maxLines(2)
+        Button(this.batchMode ? '批量编辑中' : '批量编辑', { type: ButtonType.Normal }).height(36)
+          .fontSize(Type.buttonSmall).borderRadius(Theme.radiusPill)
+          .backgroundColor(this.batchMode ? Theme.accent : Theme.accentSoft)
+          .fontColor(this.batchMode ? Theme.onAccent : Theme.accent)
+          .onClick(() => { this.batchMode = !this.batchMode; this.selectedIds = []; })
       }.alignItems(HorizontalAlign.Start).width('100%')
+
+      if (this.batchMode) { this.batchBar() }
 
       this.summary()
       if (this.garments.length > 0) { this.mostWornStrip() }

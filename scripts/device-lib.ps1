@@ -5,7 +5,7 @@
 # code page, so non-ASCII characters corrupt the parse. Chinese labels are built from code
 # points here, and layout dumps are read back with an explicit UTF-8 encoding.
 
-$script:HdcExe = 'D:\DevEco Studio 2\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe'
+$script:HdcExe = 'D:\Software\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe'
 $script:BundleName = 'com.chr.Yi_Da'
 $script:SnapshotPath = "/data/app/el2/100/base/$($script:BundleName)/haps/entry/files/wardrobe_demo_v1.json"
 

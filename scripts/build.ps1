@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([string]$DevEcoHome = 'D:\DevEco Studio 2\DevEco Studio')
+param([string]$DevEcoHome = 'D:\Software\DevEco Studio')
 
 $ErrorActionPreference = 'Stop'
 $previousJava = $env:JAVA_HOME

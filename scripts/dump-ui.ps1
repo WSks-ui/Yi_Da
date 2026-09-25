@@ -14,7 +14,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$hdcExe = 'D:\DevEco Studio 2\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe'
+$hdcExe = 'D:\Software\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe'
 if (-not (Test-Path $hdcExe)) { throw "hdc.exe not found: $hdcExe" }
 
 $stamp = Get-Date -Format 'HHmmssfff'

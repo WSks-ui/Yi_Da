@@ -46,7 +46,6 @@ test('模型 RGBA 预处理只读真实像素并核对输入尺寸', () => {
   assert.ok(result[1] < -1);
   assert.throws(() => clothing.normalizeOpenImagePixels(new Uint8Array(4)), /尺寸/);
 });
-
 test('类别和材质文件名提示覆盖代表性 token，并明确低于自动采用阈值', () => {
   assert.ok(recognition.GARMENT_CATEGORIES.length >= 70);
   assert.equal(new Set(recognition.GARMENT_CATEGORIES).size, recognition.GARMENT_CATEGORIES.length);

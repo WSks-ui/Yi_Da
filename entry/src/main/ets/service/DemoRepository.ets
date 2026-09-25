@@ -29,6 +29,17 @@ function withDefaults(snapshot: DemoSnapshot): DemoSnapshot {
     if (typeof item.style !== 'string') { item.style = '简约'; }
     if (typeof item.layering !== 'boolean') { item.layering = false; }
     if (typeof item.pattern !== 'boolean') { item.pattern = false; }
+    if (item.recommendationBias !== -1 && item.recommendationBias !== 1) { item.recommendationBias = 0; }
+    if (typeof item.season !== 'string') { item.season = ''; }
+    const normalizedTags: string[] = [];
+    if (Array.isArray(item.tags)) {
+      for (const tag of item.tags) {
+        if (typeof tag === 'string' && tag.length <= 24 && normalizedTags.indexOf(tag) < 0) {
+          normalizedTags.push(tag);
+        }
+      }
+    }
+    item.tags = normalizedTags.slice(0, 12);
   }
   for (const outfit of snapshot.saved) {
     if (typeof outfit.name !== 'string') { outfit.name = ''; }
@@ -60,6 +71,10 @@ export function validateSnapshot(snapshot: DemoSnapshot): DemoSnapshot {
       typeof item.imageKey !== 'string' || typeof item.imageUri !== 'string' || typeof item.color !== 'string' ||
       (item.subcategory !== undefined && typeof item.subcategory !== 'string') ||
       (item.material !== undefined && typeof item.material !== 'string') ||
+      (item.season !== undefined && typeof item.season !== 'string') ||
+      (item.tags !== undefined && (!Array.isArray(item.tags) || item.tags.some((tag: string) => typeof tag !== 'string'))) ||
+      (item.recommendationBias !== undefined && item.recommendationBias !== -1 && item.recommendationBias !== 0 &&
+        item.recommendationBias !== 1) ||
       (typeof item.subcategory === 'string' && item.subcategory.length > 24) ||
       (typeof item.material === 'string' && item.material.length > 24) ||
       CATEGORIES.indexOf(item.category) < 0 || STATUSES.indexOf(item.status) < 0 || !Array.isArray(item.occasions) ||

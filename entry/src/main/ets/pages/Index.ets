@@ -8,7 +8,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { Category, CATEGORIES, Garment, GarmentStatus, STATUSES, OCCASIONS, Outfit, OutfitRequest,
   Recommendation, DemoSnapshot, WearRecord, garmentImage, copyGarment,
   PreferenceProfile, emptyProfile, FITS, PALETTES, STYLES, DiaryEntry, TryOnTask, Membership,
-  BodyProfile, emptyMembership, emptyBodyProfile, completeness, trialDaysLeft, CityOption, CITIES } from '../model/Wardrobe';
+  BodyProfile, emptyMembership, emptyBodyProfile, completeness, trialDaysLeft, CityOption, CITIES, SEASONS } from '../model/Wardrobe';
 import { initialSnapshot, demoGarments } from '../data/DemoData';
 import { DemoRepository, readSnapshot, validateSnapshot } from '../service/DemoRepository';
 import { localDay, recordedDays, saveDiary, removeDiary, DiaryMutation } from '../service/WearHistory';
@@ -25,6 +25,7 @@ import { OutfitStudioPage } from './OutfitStudioPage';
 import { OutfitDetailPage } from './OutfitDetailPage';
 import { DiaryPage } from './DiaryPage';
 import { TryOnPage } from './TryOnPage';
+import { AssistantSheet, AssistantMessage, AssistantMessageRole } from './AssistantSheet';
 import { ProfilePage, BodyProfileSheet } from './ProfilePage';
 import { SyncTransferSheet } from './SyncTransferSheet';
 import { CityPickerSheet } from './CityPicker';
@@ -44,6 +45,7 @@ import { GarmentRecognition, recognizeGarment, recognitionSummary, RECOGNITION_S
   from '../service/GarmentRecognition';
 import { garmentModel } from '../service/OnDeviceGarmentModel';
 import { ClothingCandidate } from '../service/OpenImageClothing';
+import { runOutfitAgent, OutfitAgentContext, OutfitAgentSession } from '../service/OutfitAgent';
 import { createSyncEnvelope, SyncEnvelope } from '../service/WardrobeSync';
 import { commitWardrobeMigrationCandidate, MigrationPreparationResult,
   prepareWardrobeMigration, WardrobeMigrationCandidate } from '../service/WardrobeMigration';
@@ -168,6 +170,9 @@ struct Index {
   @State cardSpaces: number = 0;
   // 用户选择的城市名，落盘后下次启动仍生效。
   @State city: string = '';
+  @State agentMessages: AssistantMessage[] = [];
+  @State agentOutfits: Outfit[] = [];
+  private agentLatestOutfit: Outfit | undefined = undefined;
   // 主路由：tabs 为底部四入口；其余值打开对应的独立页面。
   @State mainRoute: string = 'tabs';
   // 弹层内容的入场开关：openSheet 里置回false，延后一帧置 true，触发内容淡入。
@@ -196,6 +201,7 @@ struct Index {
   private weatherRequest: number = 0;
   private pendingWearId: string = '';
   private recordingWear: boolean = false;
+  private agentMessageSequence: number = 0;
 
   aboutToAppear(): void {
     this.alive = true;
@@ -342,6 +348,50 @@ struct Index {
     // 延迟 50ms 是为了让半模态自身的上滑先起势，内容再跟上，读起来是一件事而不是两件。
     this.sheetEntered = false;
     setTimeout(() => { this.sheetEntered = true; }, 50);
+  }
+
+  private openAssistant(): void {
+    if (this.agentMessages.length === 0) {
+      this.agentMessages = [{ id: 'agent_welcome', role: AssistantMessageRole.ASSISTANT,
+        text: '你好，我是易搭助手。我会读取你的衣橱、天气、场合和反馈，给出可解释的穿搭方案。' }];
+    }
+    this.agentOutfits = this.plans.slice(0, 3);
+    this.openSheet('assistant');
+  }
+
+  private addAgentMessage(role: AssistantMessageRole, text: string): void {
+    this.agentMessageSequence++;
+    this.agentMessages = this.agentMessages.concat([{ id: `agent_${this.agentMessageSequence}`,
+      role: role, text: text }]);
+  }
+
+  private submitAssistant(input: string): void {
+    this.addAgentMessage(AssistantMessageRole.USER, input);
+    const context: OutfitAgentContext = { garments: this.garments, profile: this.profile, body: this.body,
+      occasion: this.occasion, temperature: this.temperature, lockedIds: this.lockedIds,
+      excludedIds: this.excludedIds };
+    const session: OutfitAgentSession = { latestOutfit: this.agentLatestOutfit };
+    const result = runOutfitAgent(input, context, session);
+    this.occasion = result.occasion;
+    this.temperature = result.temperature;
+    this.plans = result.recommendation.outfits;
+    this.explanation = result.recommendation.explanation;
+    this.agentLatestOutfit = result.latestOutfit;
+    this.agentOutfits = result.recommendation.outfits.slice(0, 3);
+    // 没有完整方案时保留用户当前搭配，不能因为助手的一次询问把桌面卡片清空。
+    if (result.recommendation.outfits.length > 0) {
+      this.activeIds = result.recommendation.outfits[0].garmentIds.slice();
+    }
+    this.addAgentMessage(AssistantMessageRole.ASSISTANT, result.reply);
+    this.persist();
+  }
+
+  private applyAgentOutfit(look: Outfit): void {
+    this.activeIds = look.garmentIds.slice();
+    this.plans = [look].concat(this.plans.filter((item: Outfit) => item.id !== look.id));
+    this.persist();
+    this.showSheet = false;
+    this.toast('已应用这套搭配');
   }
 
   private restore(snapshot: DemoSnapshot): void {
@@ -647,12 +697,56 @@ struct Index {
     this.regenerate(); this.persist();
   }
 
+  private batchEditGarments(ids: string[], status: GarmentStatus | undefined,
+    season: string, tag: string): void {
+    if (this.readBlocked || this.businessBusy() || ids.length === 0) { return; }
+    this.invalidateRetry();
+    const selected: string[] = ids.slice();
+    const nextGarments: Garment[] = this.garments.map((item: Garment) => {
+      if (selected.indexOf(item.id) < 0) { return item; }
+      const changed: Garment = copyGarment(item);
+      if (status !== undefined) { changed.status = status; }
+      if (season.length > 0) { changed.season = season; }
+      if (tag.length > 0) {
+        const tags: string[] = (changed.tags || []).slice();
+        if (tags.indexOf(tag) < 0) { tags.push(tag); }
+        changed.tags = tags.slice(0, 12);
+      }
+      return changed;
+    });
+    const candidate: DemoSnapshot = this.withGarments(nextGarments);
+    this.commit(candidate, () => {
+      this.garments = nextGarments;
+      this.regenerate();
+    }, () => { this.toast(`已批量更新 ${selected.length} 件衣物`); }, () => {
+      this.batchEditGarments(selected, status, season, tag);
+    });
+  }
+
   private changeStatus(status: GarmentStatus): void {
     if (this.readBlocked || this.businessBusy()) { return; }
     this.invalidateRetry();
     const changed: Garment = copyGarment(this.selectedItem); changed.status = status;
     this.garments = this.garments.map((item: Garment) => item.id === changed.id ? changed : item);
     this.selectedItem = changed; this.regenerate(); this.persist();
+  }
+
+  // 单件反馈走全量快照提交：先落盘成功，再刷新当前衣物和推荐，失败时保留顶部重试入口。
+  private async setRecommendationBias(bias: number): Promise<void> {
+    if (this.readBlocked || this.businessBusy()) { return; }
+    const normalized: number = bias > 0 ? 1 : bias < 0 ? -1 : 0;
+    const changed: Garment = copyGarment(this.selectedItem);
+    changed.recommendationBias = normalized;
+    const nextGarments: Garment[] = this.garments.map((item: Garment) =>
+      item.id === changed.id ? changed : item);
+    this.invalidateRetry();
+    await this.commit(this.withGarments(nextGarments), () => {
+      this.garments = nextGarments;
+      this.selectedItem = changed;
+      this.regenerate();
+    }, () => {
+      this.toast(normalized === 1 ? '已设为优先推荐' : normalized === -1 ? '本轮会少推荐这件' : '已恢复中性推荐');
+    }, () => { this.setRecommendationBias(normalized).catch(() => {}); });
   }
 
   private async pickPhoto(): Promise<void> {
@@ -1892,7 +1986,7 @@ struct Index {
       Row({ space: Theme.spaceM }) {
         SymbolGlyph($r('sys.symbol.sun_max')).fontSize(Theme.iconMd).fontColor([Theme.success])
         Column({ space: Theme.spaceXs }) {
-          Text('。· ' + this.temperature + '℃').fontSize(Type.section).fontWeight(FontWeight.Medium)
+          Text(this.temperature + '℃').fontSize(Type.section).fontWeight(FontWeight.Medium)
             .fontColor(Theme.text).maxLines(1)
           Text('手动天气 · ' + new Date().toLocaleDateString())
             .fontSize(Type.caption).fontColor(Theme.secondary).maxLines(1)
@@ -2025,6 +2119,9 @@ struct Index {
       onOpenDiy: () => { this.openStudio(); },
       onOpenDiary: () => { this.openRoute('diary'); },
       onOpenTryOn: () => { this.openTryOn(); },
+      onOpenAssistant: () => { this.openAssistant(); },
+      onSaveOutfit: (look: Outfit) => { this.saveLook(look); },
+      onRecordLook: (look: Outfit) => { this.beginWear(look); },
       onOpenProfile: () => { this.switchTab(3); },
       onOpenCity: () => { this.openSheet('city'); },
       monthRecorded: this.monthRecordedDays(),
@@ -2159,7 +2256,10 @@ struct Index {
       onSearch: (value: string) => { this.search = value; },
       onAddGarment: () => { if (!this.readBlocked) { this.openAdd(); } },
       onOpenItem: (item: Garment) => { this.selectedItem = item; this.openSheet('detail'); },
-      onSetStatus: (id: string, status: GarmentStatus) => { this.setStatusById(id, status); }
+      onSetStatus: (id: string, status: GarmentStatus) => { this.setStatusById(id, status); },
+      onBatchEdit: (ids: string[], status: GarmentStatus | undefined, season: string, tag: string) => {
+        this.batchEditGarments(ids, status, season, tag);
+      }
     })
   }
 
@@ -2262,7 +2362,7 @@ struct Index {
 
   @Builder
   private quizSingle(label: string, selected: boolean, action: () => void) {
-    Button(selected ? '。' + label : label, { type: ButtonType.Normal }).fontSize(Type.buttonSmall)
+    Button(label, { type: ButtonType.Normal }).fontSize(Type.buttonSmall)
       .height(Theme.buttonHeight).width('100%').borderRadius(Theme.radiusCard)
       .backgroundColor(selected ? Theme.accentSoft : Theme.surfaceSoft)
       .fontColor(selected ? Theme.accent : Theme.text)
@@ -2281,15 +2381,15 @@ struct Index {
       this.resultRow('配色偏好', this.profile.palettes.length > 0 ? this.profile.palettes.join('、') : '尚未选择')
       this.resultRow('风格倾向', this.profile.styles.length > 0 ? this.profile.styles.join('、') : '尚未选择')
       this.resultRow('叠穿接受', this.profile.layering > 0 ? '较高' : (this.profile.layering < 0 ? '较低' : '中等'))
-      this.resultRow('图案与配度', this.profile.accessories > 0 ? '较高' : (this.profile.accessories < 0 ? '较低' : '中等'))
-      this.resultRow('出门优先饰', this.profile.priority.length > 0 ? this.profile.priority : '尚未选择')
+      this.resultRow('图案与配饰', this.profile.accessories > 0 ? '较高' : (this.profile.accessories < 0 ? '较低' : '中等'))
+      this.resultRow('出门优先级', this.profile.priority.length > 0 ? this.profile.priority : '尚未选择')
       Button('修改偏好', { type: ButtonType.Normal }).width('100%').height(Theme.buttonHeight)
         .borderRadius(Theme.radiusPill).backgroundColor(Theme.accentSoft).fontColor(Theme.accent)
         .fontSize(Type.button).pressable().onClick(() => this.openQuiz())
       Button('重新测验', { type: ButtonType.Normal }).width('100%').height(Theme.buttonHeight)
         .borderRadius(Theme.radiusPill).backgroundColor(Theme.surfaceSoft).fontColor(Theme.text)
         .fontSize(Type.button).pressable().onClick(() => this.resetProfile())
-      Button('开始整理衣项', { type: ButtonType.Normal }).width('100%').height(Theme.buttonHeight)
+      Button('开始整理衣橱', { type: ButtonType.Normal }).width('100%').height(Theme.buttonHeight)
         .borderRadius(Theme.radiusPill).backgroundColor(Theme.accent).fontColor(Color.White)
         .fontSize(Type.button).pressable().onClick(() => { this.showSheet = false; this.switchTab(1); })
     }.width('100%')
@@ -2368,11 +2468,11 @@ struct Index {
           }.width('100%')
         }
         Row({ space: Theme.spaceM }) {
-          Button('上一达', { type: ButtonType.Normal }).fontSize(Type.buttonSmall).height(Theme.buttonHeight)
+          Button('上一题', { type: ButtonType.Normal }).fontSize(Type.buttonSmall).height(Theme.buttonHeight)
             .layoutWeight(1).borderRadius(Theme.radiusPill).backgroundColor(Theme.surfaceSoft)
             .fontColor(Theme.text).enabled(this.quizStep > 1).pressable()
             .onClick(() => { if (this.quizStep > 1) { this.quizStep = this.quizStep - 1; } })
-          Button('不确', { type: ButtonType.Normal }).fontSize(Type.buttonSmall).height(Theme.buttonHeight)
+          Button('不确定', { type: ButtonType.Normal }).fontSize(Type.buttonSmall).height(Theme.buttonHeight)
             .layoutWeight(1).borderRadius(Theme.radiusPill).backgroundColor(Theme.surfaceSoft)
             .fontColor(Theme.secondary).pressable()
             .onClick(() => {
@@ -2404,6 +2504,25 @@ struct Index {
       }
       Text('已穿 ' + this.selectedItem.wearCount + ' 次 · ' + this.selectedItem.occasions.join('、'))
         .fontSize(Type.caption).fontColor(Theme.secondary).width('100%')
+      Text('推荐偏好').fontSize(Type.body).fontColor(Theme.text).width('100%')
+      Text(this.selectedItem.recommendationBias === 1 ? '已标记为优先推荐' :
+        this.selectedItem.recommendationBias === -1 ? '已标记为少推荐' : '当前为中性，不改变推荐顺序')
+        .fontSize(Type.caption).fontColor(Theme.secondary).width('100%')
+      Row({ space: Theme.spaceS }) {
+        Button('多推荐', { type: ButtonType.Normal }).layoutWeight(1).height(Theme.buttonHeight)
+          .borderRadius(Theme.radiusPill)
+          .backgroundColor(this.selectedItem.recommendationBias === 1 ? Theme.accent : Theme.accentSoft)
+          .fontColor(this.selectedItem.recommendationBias === 1 ? Color.White : Theme.accent)
+          .enabled(!this.readBlocked).onClick(() => { this.setRecommendationBias(1); })
+        Button('少推荐', { type: ButtonType.Normal }).layoutWeight(1).height(Theme.buttonHeight)
+          .borderRadius(Theme.radiusPill)
+          .backgroundColor(this.selectedItem.recommendationBias === -1 ? Theme.accent : Theme.accentSoft)
+          .fontColor(this.selectedItem.recommendationBias === -1 ? Color.White : Theme.accent)
+          .enabled(!this.readBlocked).onClick(() => { this.setRecommendationBias(-1); })
+        Button('中性', { type: ButtonType.Normal }).layoutWeight(1).height(Theme.buttonHeight)
+          .borderRadius(Theme.radiusPill).backgroundColor(Theme.surfaceSoft).fontColor(Theme.secondary)
+          .enabled(!this.readBlocked).onClick(() => { this.setRecommendationBias(0); })
+      }.width('100%')
       Button('编辑衣物', { type: ButtonType.Normal }).width('100%').height(Theme.buttonHeight)
         .borderRadius(Theme.radiusPill).backgroundColor(Theme.accentSoft).fontColor(Theme.accent)
         .fontSize(Type.button).enabled(!this.readBlocked).onClick(() => this.openEdit())
@@ -2478,6 +2597,13 @@ struct Index {
         else if (this.sheet === 'transfer') { SyncTransferSheet({
           onExport: () => this.exportMigration(),
           onImport: () => this.importMigration() }) }
+        else if (this.sheet === 'assistant') { AssistantSheet({
+          messages: this.agentMessages,
+          outfits: this.agentOutfits,
+          onSubmit: (input: string) => { this.submitAssistant(input); },
+          onQuick: (input: string) => { this.submitAssistant(input); },
+          onApply: (look: Outfit) => { this.applyAgentOutfit(look); }
+        }) }
         else if (this.sheet === 'city') {
           CityPickerSheet({ currentCity: this.city, currentTemperature: this.temperature,
             weatherAvailable: this.weather.available, weatherSource: this.weather.source,

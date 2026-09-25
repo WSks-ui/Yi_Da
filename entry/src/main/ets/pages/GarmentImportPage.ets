@@ -559,7 +559,7 @@ export struct GarmentImportPage {
             Text(this.recognitionMessage).fontSize(Type.caption).fontColor(Theme.secondary)
               .layoutWeight(1).maxLines(5)
             if (this.recognitionColor.length > 0 && this.currentColor() !== this.recognitionColor) {
-              Button('用颜色', { type: ButtonType.Normal }).height(32).fontSize(Type.buttonSmall)
+              Button('采用', { type: ButtonType.Normal }).height(32).fontSize(Type.buttonSmall)
                 .backgroundColor(Theme.accentSoft).fontColor(Theme.accent).borderRadius(Theme.radiusInput)
                 .enabled(this.currentCanEdit())
                 .onClick(() => this.onUseRecognition(this.currentIndex))

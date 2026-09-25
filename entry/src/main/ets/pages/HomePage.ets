@@ -39,6 +39,9 @@ export struct HomePage {
   onOpenDiy: () => void = () => {};
   onOpenDiary: () => void = () => {};
   onOpenTryOn: () => void = () => {};
+  onOpenAssistant: () => void = () => {};
+  onSaveOutfit: (look: Outfit) => void = () => {};
+  onRecordLook: (look: Outfit) => void = () => {};
   onOpenProfile: () => void = () => {};
   onOpenCity: () => void = () => {};
   onOpenOutfit: (look: Outfit) => void = () => {};
@@ -309,6 +312,16 @@ export struct HomePage {
         }.width('100%')
       }.height(44).width('100%').backgroundColor(Theme.accentSoft).borderRadius(8)
         .onClick(() => this.onOpenOutfit(look))
+      Row({ space: Theme.spaceS }) {
+        Button('收藏方案', { type: ButtonType.Normal }).layoutWeight(1).height(36)
+          .fontSize(Type.buttonSmall).borderRadius(Theme.radiusPill)
+          .backgroundColor(Theme.surfaceSoft).fontColor(Theme.secondary)
+          .onClick(() => this.onSaveOutfit(look))
+        Button('记录已穿', { type: ButtonType.Normal }).layoutWeight(1).height(36)
+          .fontSize(Type.buttonSmall).borderRadius(Theme.radiusPill)
+          .backgroundColor(Theme.accent).fontColor(Theme.onAccent)
+          .onClick(() => this.onRecordLook(look))
+      }.width('100%')
     }.width('100%').padding(16).borderRadius(Theme.radiusCard).backgroundColor(Theme.surface)
   }
 
@@ -378,6 +391,19 @@ export struct HomePage {
       Column() { this.weatherRow() }.width('100%')
         .opacity(this.entered ? 1 : 0).translate({ y: this.entered ? 0 : 20 })
         .animation({ duration: 300, delay: 0, curve: Curve.FastOutSlowIn })
+      Row({ space: 10 }) {
+        SymbolGlyph($r('sys.symbol.person')).fontSize(22).fontColor([Theme.accent])
+        Column({ space: 2 }) {
+          Text('易搭助手').fontSize(Type.bodySmall).fontWeight(FontWeight.Medium).fontColor(Theme.text)
+          Text('说说场合和温度，马上生成方案').fontSize(Type.caption).fontColor(Theme.secondary)
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        Button('开始', { type: ButtonType.Normal }).height(34).width(68).fontSize(Type.buttonSmall)
+          .borderRadius(Theme.radiusPill).backgroundColor(Theme.accentSoft).fontColor(Theme.accent)
+          .onClick(() => this.onOpenAssistant())
+      }.width('100%').padding({ left: 14, right: 8, top: 8, bottom: 8 })
+        .backgroundColor(Theme.accentSoft).borderRadius(Theme.radiusCard)
+        .opacity(this.entered ? 1 : 0).translate({ y: this.entered ? 0 : 20 })
+        .animation({ duration: 300, delay: 35, curve: Curve.FastOutSlowIn })
       Column() { this.entryBoard() }.width('100%')
         .opacity(this.entered ? 1 : 0).translate({ y: this.entered ? 0 : 20 })
         .animation({ duration: 300, delay: 55, curve: Curve.FastOutSlowIn })

@@ -173,6 +173,17 @@ test('低温添加外套，缺少外套给出原因', () => {
   assert.match(missing.explanation, /外套/);
 });
 
+test('有可穿配饰时推荐会顺带加入，没有配饰时仍保持完整方案', () => {
+  const garments = demoGarments();
+  const accessory = { id: 'scarf', name: '浅色围巾', category: Category.ACCESSORY, imageKey: 'graphic',
+    imageUri: '', color: '米白色', minTemp: 5, maxTemp: 24, occasions: ['上课'], status: GarmentStatus.READY,
+    wearCount: 0, isDemo: true, fit: '合身', palette: '低饱和', style: '学院', layering: true, pattern: false };
+  const withAccessory = recommend(garments.concat([accessory]), query({ temperature: 18 }));
+  assert.ok(withAccessory.outfits.length > 0);
+  assert.ok(withAccessory.outfits[0].garmentIds.includes('scarf'));
+  assert.ok(recommend(garments, query({ temperature: 18 })).outfits.length > 0);
+});
+
 test('温度和场合是硬约束', () => {
   assert.equal(recommend(demoGarments(), query({ temperature: 36 })).outfits.length, 0);
   assert.equal(recommend(demoGarments(), query({ temperature: NaN })).outfits.length, 0);
@@ -245,6 +256,27 @@ test('偏好档案只调整推荐顺序，不排除衣物也不改变方案数�
   // 同一批衣物，方案数量不变；只是宽松学院风的单品排到前面。
   assert.equal(prefersBaggy.outfits.length, plain.outfits.length);
   assert.equal(prefersBaggy.outfits[0].garmentIds.includes('shirt'), true);
+});
+
+test('单件多推荐/少推荐只调整顺序，温度与状态硬约束仍然优先', () => {
+  const neutral = demoGarments();
+  const preferred = demoGarments();
+  preferred.find(item => item.id === 'shirt').recommendationBias = 1;
+  const preferredResult = recommend(preferred, query());
+  assert.equal(preferredResult.outfits[0].garmentIds.includes('shirt'), true);
+
+  const rejected = demoGarments();
+  rejected.find(item => item.id === 'shirt').recommendationBias = -1;
+  const rejectedResult = recommend(rejected, query());
+  assert.equal(rejectedResult.outfits[0].garmentIds.includes('shirt'), false);
+
+  const unavailable = demoGarments();
+  unavailable.find(item => item.id === 'shirt').recommendationBias = 1;
+  unavailable.find(item => item.id === 'shirt').maxTemp = 18;
+  const hardConstraint = recommend(unavailable, query());
+  assert.ok(hardConstraint.outfits.length > 0);
+  assert.equal(hardConstraint.outfits[0].garmentIds.includes('shirt'), false);
+  assert.equal(neutral.find(item => item.id === 'shirt').recommendationBias, undefined);
 });
 
 test('偏好与硬约束冲突时，硬约束仍然优先', () => {

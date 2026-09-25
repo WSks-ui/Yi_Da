@@ -10,6 +10,7 @@ export const CATEGORIES: Category[] = [Category.TOP, Category.BOTTOM, Category.S
 export const STATUSES: GarmentStatus[] = [GarmentStatus.READY, GarmentStatus.LAUNDRY, GarmentStatus.STORED,
   GarmentStatus.HIDDEN, GarmentStatus.ARCHIVED];
 export const OCCASIONS: string[] = ['上课', '课程展示', '社团', '约会'];
+export const SEASONS: string[] = ['春', '夏', '秋', '冬', '四季'];
 
 // 版型、配色和风格用于把偏好档案转成推荐顺序。演示衣物只有图片，属性是内置示例值。
 export const FITS: string[] = ['宽松', '合身', '有轮廓感'];
@@ -46,8 +47,14 @@ export interface Garment {
   minTemp: number;
   maxTemp: number;
   occasions: string[];
+  // 季节和用户标签是可选整理字段；旧快照缺失时按空值处理。
+  season?: string;
+  tags?: string[];
   status: GarmentStatus;
   wearCount: number;
+  // 用户对单件衣物的推荐反馈：1 多推荐，-1 少推荐，0/缺省为中性。
+  // 这是软排序信号，不会绕过待洗、温度、场合等硬约束。
+  recommendationBias?: number;
   isDemo: boolean;
   // 偏好匹配用的属性。导入的衣物在用户确认前保持中性值，不猜测。
   fit: string;
@@ -249,12 +256,21 @@ export function completeness(snapshot: DemoSnapshot): Completeness {
 }
 
 export function copyGarment(item: Garment): Garment {
-  return {
+  const copy: Garment = {
     id: item.id, name: item.name, category: item.category, imageKey: item.imageKey,
     imageUri: item.imageUri, color: item.color, minTemp: item.minTemp, maxTemp: item.maxTemp,
-    occasions: item.occasions.slice(), status: item.status, wearCount: item.wearCount, isDemo: item.isDemo,
+    occasions: item.occasions.slice(), status: item.status, wearCount: item.wearCount,
+    isDemo: item.isDemo,
     fit: item.fit, palette: item.palette, style: item.style, layering: item.layering, pattern: item.pattern
   };
+  // Optional 字段只有在原对象确实存在时才复制，避免旧快照的 JSON 形状被
+  // 无意义的 undefined 键改变，同时保留用户已确认的细类、材质和反馈。
+  if (item.subcategory !== undefined) { copy.subcategory = item.subcategory; }
+  if (item.material !== undefined) { copy.material = item.material; }
+  if (item.season !== undefined) { copy.season = item.season; }
+  if (item.tags !== undefined) { copy.tags = item.tags.slice(); }
+  if (item.recommendationBias !== undefined) { copy.recommendationBias = item.recommendationBias; }
+  return copy;
 }
 
 export function garmentImage(item: Garment): ResourceStr {
