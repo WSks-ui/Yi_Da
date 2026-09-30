@@ -17,7 +17,7 @@ import {
 } from './WardrobeMigration';
 import { IMPORT_BATCH_PREFIX } from './GarmentImport';
 
-export const DEFAULT_MIGRATION_FILE_NAME: string = '艺起搭_衣橱迁移';
+export const DEFAULT_MIGRATION_FILE_NAME: string = '艺搭_衣橱迁移';
 export const MIGRATION_FILE_SUFFIX: string = '.yida';
 // 复用现有导入批次前缀，使 DemoRepository.sweepOrphans 能按同一受限规则清理
 // 未被快照引用的迁移图片；已写入快照的 URI 会被 referencedImages 保留。
@@ -314,7 +314,7 @@ export async function saveMigrationPackageWithPicker(context: common.UIAbilityCo
     const viewPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(context);
     const options: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
     options.newFileNames = [safeName + MIGRATION_FILE_SUFFIX];
-    options.fileSuffixChoices = ['艺起搭衣橱迁移包|' + MIGRATION_FILE_SUFFIX];
+    options.fileSuffixChoices = ['艺搭衣橱迁移包|' + MIGRATION_FILE_SUFFIX];
     const targets: string[] = await viewPicker.save(options);
     if (!targets || targets.length === 0) { return { status: 'cancelled', message: '已取消导出迁移包' }; }
     if (targets.length !== 1 || typeof targets[0] !== 'string' || targets[0].length === 0) {
@@ -342,7 +342,7 @@ export async function selectMigrationPackageWithPicker(context: common.UIAbility
   try {
     const viewPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(context);
     const options: picker.DocumentSelectOptions = new picker.DocumentSelectOptions();
-    options.fileSuffixFilters = ['艺起搭衣橱迁移包|' + MIGRATION_FILE_SUFFIX, 'JSON|.json'];
+    options.fileSuffixFilters = ['艺搭衣橱迁移包|' + MIGRATION_FILE_SUFFIX, 'JSON|.json'];
     options.maxSelectNumber = 1;
     const selected: string[] = await viewPicker.select(options);
     if (!selected || selected.length === 0) { return { status: 'cancelled', message: '已取消导入迁移包' }; }

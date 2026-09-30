@@ -1,4 +1,4 @@
-# 艺起搭 · Yi_Da
+# 艺搭 · Yi_Da
 
 面向鸿蒙高校创新赛的**原生数字衣橱与穿搭推荐**演示应用。使用 ArkTS / ArkUI 与 Stage 模型，
 `targetSdkVersion` 与 `compatibleSdkVersion` 均为 **HarmonyOS API 26.0.0**（HarmonyOS 7），设备类型 `phone`、`tablet`。

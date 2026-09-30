@@ -27,7 +27,7 @@ export async function exportOutfit(pixelMap: image.PixelMap, context: common.UIA
 }
 
 export async function shareOutfitImage(uri: string, context: common.UIAbilityContext,
-  title: string = '艺起搭 · 我的搭配'): Promise<void> {
+  title: string = '艺搭 · 我的搭配'): Promise<void> {
   const data: systemShare.SharedData = new systemShare.SharedData({
     utd: uniformTypeDescriptor.UniformDataType.PNG, uri: uri, title: title
   });
@@ -38,7 +38,7 @@ export async function saveOutfitToAlbum(uri: string, context: common.UIAbilityCo
   const helper: photoAccessHelper.PhotoAccessHelper = photoAccessHelper.getPhotoAccessHelper(context);
   try {
     const targets: string[] = await helper.showAssetsCreationDialog([uri], [{
-      title: '艺起搭_' + Date.now(), fileNameExtension: 'png', photoType: photoAccessHelper.PhotoType.IMAGE
+      title: '艺搭_' + Date.now(), fileNameExtension: 'png', photoType: photoAccessHelper.PhotoType.IMAGE
     }]);
     if (targets.length === 0) { return false; }
     const source: fs.File = await fs.open(uri, fs.OpenMode.READ_ONLY);

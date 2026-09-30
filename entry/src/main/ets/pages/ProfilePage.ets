@@ -83,7 +83,7 @@ export struct ProfilePage {  @Prop membership: Membership = { startDate: '', tri
     Column({ space: Theme.spaceL }) {
       Column({ space: Theme.spaceXs }) {
         Text('我的').fontSize(Type.title).fontWeight(FontWeight.Bold).fontColor(Theme.text).maxLines(1)
-        Text('艺起搭 · 本地衣橱').fontSize(Type.caption).fontColor(Theme.secondary).maxLines(1)
+        Text('艺搭 · 本地衣橱').fontSize(Type.caption).fontColor(Theme.secondary).maxLines(1)
       }.alignItems(HorizontalAlign.Start).width('100%')
 
       MaterialCard({ contentPadding: Theme.spaceL }) {

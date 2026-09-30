@@ -848,8 +848,8 @@ struct Index {
 
   private async shareLook(look: Outfit): Promise<void> {
     try {
-      const content: string = '艺起搭 · ' + look.occasion + '穿搭\n' +
-        this.itemsFor(look).map((item: Garment) => item.name).join(' + ') + '\n' + look.reason + '\n来自艺起搭';
+      const content: string = '艺搭 · ' + look.occasion + '穿搭\n' +
+        this.itemsFor(look).map((item: Garment) => item.name).join(' + ') + '\n' + look.reason + '\n来自艺搭';
       const data: systemShare.SharedData = new systemShare.SharedData({
         utd: uniformTypeDescriptor.UniformDataType.PLAIN_TEXT, content: content
       });
@@ -2865,7 +2865,7 @@ struct Index {
   private topCapsules() {
     Row() {
       Row() {
-        Text('艺起').fontSize(Type.cardTitle).fontWeight(FontWeight.Bold)
+        Text('艺搭').fontSize(Type.cardTitle).fontWeight(FontWeight.Bold)
           .fontColor(Theme.text).maxLines(1)
       }
         .padding({ left: Theme.spaceL, right: Theme.spaceL, top: Theme.spaceS, bottom: Theme.spaceS })

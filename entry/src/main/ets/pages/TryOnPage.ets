@@ -186,7 +186,7 @@ export struct TryOnPage {
         const saved: boolean = await saveOutfitToAlbum(uri, context);
         if (this.alive) { this.notice = saved ? '样片已保存到相册' : '已取消保存'; }
       } else {
-        await shareOutfitImage(uri, context, '艺起搭 · 试穿演示样片');
+        await shareOutfitImage(uri, context, '艺搭 · 试穿演示样片');
       }
     } catch (error) {
       if (this.alive) {

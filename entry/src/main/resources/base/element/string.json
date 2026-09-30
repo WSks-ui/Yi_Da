@@ -2,7 +2,7 @@
   "string": [
     {
       "name": "module_desc",
-      "value": "艺起搭数字衣橱"
+      "value": "艺搭数字衣橱"
     },
     {
       "name": "EntryAbility_desc",
@@ -10,7 +10,7 @@
     },
     {
       "name": "EntryAbility_label",
-      "value": "艺起搭"
+      "value": "艺搭"
     },
     {
       "name": "today_form_name",
