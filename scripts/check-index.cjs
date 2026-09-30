@@ -27,7 +27,9 @@ const GI = require('../entry/src/main/ets/service/GarmentImport.ets');
 const RECOGNITION = require('../entry/src/main/ets/service/GarmentRecognition.ets');
 const DADA = require('../entry/src/main/ets/service/DadaContext.ets');
 const PRESENTATION = require('../entry/src/main/ets/service/TryOnPresentationController.ets');
+const REPLIES = require('../entry/src/main/ets/service/AssistantReplyController.ets');
 const AGENT = require('../entry/src/main/ets/service/OutfitAgent.ets');
+const { replyClock } = require('./fixtures/reply-clock.cjs');
 
 const INDEX_SOURCE_PATH = path.resolve(__dirname, '../entry/src/main/ets/pages/Index.ets');
 const INDEX_SOURCE = fs.readFileSync(INDEX_SOURCE_PATH, 'utf8');
@@ -111,6 +113,7 @@ function makeIndexProbe() {
     ...MIGRATION,
     ...DADA,
     ...PRESENTATION,
+    ...REPLIES,
     ...AGENT,
     AssistantMessageRole: { USER: 'user', ASSISTANT: 'assistant' },
     recognitionSummary: RECOGNITION.recognitionSummary,
@@ -1074,6 +1077,41 @@ function makeDadaPage(options = {}) {
   harness.page.openAssistant();
   return harness;
 }
+
+test('真实搭搭呈现接线：等待期间不重复发送或采用，逐字完成后仍由落盘链采用', async () => {
+  const { page, repository } = makeDadaPage(); const clock = replyClock();
+  page.setupAssistantReplies(clock.scheduler); const before = JSON.stringify(page.snapshot());
+  page.submitAssistant('上课，24度'); const count = page.agentMessages.length;
+  const look = page.agentOutfits[0]; assert.equal(page.assistantReply.stage, 'waiting');
+  page.submitAssistant('正式一点'); await page.applyAgentOutfit(look);
+  assert.equal(page.agentMessages.length, count); assert.equal(repository.saveCalls.length, 0);
+  assert.equal(JSON.stringify(page.snapshot()), before); clock.advance(1000);
+  assert.equal(page.assistantReply.stage, 'typing'); assert.ok(page.agentMessages.at(-1).text.startsWith(page.assistantReply.text));
+  clock.drain(); assert.equal(page.assistantReply.stage, 'complete'); await page.applyAgentOutfit(look);
+  assert.equal(repository.saveCalls.length, 1); assert.equal(page.showSheet, false); page.aboutToDisappear();
+});
+test('真实搭搭呈现接线：关闭、后台和销毁使旧回复失效，保留完整历史与草稿', () => {
+  const { page, repository } = makeDadaPage(); const clock = replyClock(); page.setupAssistantReplies(clock.scheduler);
+  page.draftImages = ['file://sandbox/form.png']; page.submitAssistant('今天怎么穿');
+  const history = JSON.stringify(page.agentMessages), old = clock.ids()[0];
+  page.showSheet = false; page.onSheetClosed(); clock.stale(old);
+  assert.equal(page.assistantReply.stage, 'idle'); assert.equal(JSON.stringify(page.agentMessages), history);
+  assert.deepEqual(page.draftImages, ['file://sandbox/form.png']); assert.equal(repository.discarded.length, 0);
+  page.openAssistant(); page.submitAssistant('正式一点'); const background = clock.ids()[0];
+  page.foreground = false; page.onDadaForegroundChanged(); clock.stale(background);
+  assert.equal(page.assistantReply.stage, 'idle'); assert.equal(clock.count(), 0);
+  page.foreground = true; page.submitAssistant('今天怎么穿'); const disposed = clock.ids()[0];
+  page.aboutToDisappear(); clock.stale(disposed); assert.equal(clock.count(), 0);
+  assert.equal(repository.saveCalls.length, 0);
+});
+test('真实搭搭呈现接线：多轮回复完成后，追问仍沿用候选条件且不写业务快照', () => {
+  const { page, repository } = makeDadaPage(); const clock = replyClock(); page.setupAssistantReplies(clock.scheduler);
+  const before = JSON.stringify(page.snapshot()); page.submitAssistant('课程展示，26度'); clock.drain();
+  page.submitAssistant('再来一套'); assert.equal(page.assistantReply.stage, 'waiting'); clock.drain();
+  assert.equal(page.assistantProposal.occasion, '课程展示'); assert.equal(page.assistantProposal.temperature, 26);
+  assert.equal(JSON.stringify(page.snapshot()), before); assert.equal(repository.saveCalls.length, 0);
+  page.aboutToDisappear();
+});
 
 test('真实搭搭接线：发送指令只发布聊天候选，连续追问沿用候选场合与温度', () => {
   const { page, repository } = makeDadaPage();

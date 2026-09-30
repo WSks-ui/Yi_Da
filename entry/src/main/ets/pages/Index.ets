@@ -41,7 +41,7 @@ import { GarmentImportController } from '../service/GarmentImportController';
 import { CommitCallbacks, SnapshotCommit } from '../service/SnapshotCommit';
 import { GarmentImportPage } from './GarmentImportPage';
 import { bundledPhotoId, bundledPhotoSource, importBundledGarmentPhoto } from '../service/BundledGarmentPhotos';
-import { GarmentRecognition, recognitionSummary, RECOGNITION_SOURCE_PIXEL_COLOR }
+import { GarmentRecognition, RECOGNITION_SOURCE_PIXEL_COLOR }
   from '../service/GarmentRecognition';
 import { recognizeGarmentPhoto as recognizeGarment } from '../service/GarmentRecognitionImage';
 import { garmentModel } from '../service/OnDeviceGarmentModel';
@@ -54,6 +54,8 @@ import { createCoreFileMigrationTargetAdapter, exportWardrobeMigrationWithPicker
   selectMigrationPackageWithPicker } from '../service/WardrobeMigrationHost';
 import { findDemoScene, saveDemoTask } from '../service/TryOnDemo';
 import { DadaEntry } from '../components/DadaOrb';
+import { AssistantReplyController, AssistantReplyScheduler, AssistantReplyView,
+  assistantReplyActive, emptyAssistantReply } from '../service/AssistantReplyController';
 import { AssistantProposal, DadaAction, DadaContext, DadaPage, DadaState, DADA_WELCOME, TRY_ON_BOUNDARY,
   dadaGuide, validateAssistantOutfit } from '../service/DadaContext';
 import { TryOnCommand, TryOnStage, presentationRunning } from '../service/TryOnPresentationController';
@@ -183,6 +185,9 @@ struct Index {
   @State dadaState: DadaState = DadaState.IDLE;
   @State dadaFeedback: string = '';
   @State assistantBusy: boolean = false;
+  @State assistantReply: AssistantReplyView = emptyAssistantReply();
+  private assistantReplyController: AssistantReplyController | undefined = undefined;
+  private assistantReplyUnsubscribe: (() => void) | undefined = undefined;
   @State assistantContext: DadaContext = { page: DadaPage.TODAY, key: 'today', objectId: '' };
   private assistantProposal: AssistantProposal | undefined = undefined;
   private assistantProposalSequence: number = 0;
@@ -223,6 +228,7 @@ struct Index {
 
   aboutToAppear(): void {
     this.alive = true;
+    this.setupAssistantReplies();
     const context: common.UIAbilityContext = this.context();
     this.repository = new DemoRepository(context.filesDir);
     try {
@@ -310,7 +316,11 @@ struct Index {
     this.persist();
   }
 
-  aboutToDisappear(): void { this.alive = false; }
+  aboutToDisappear(): void {
+    this.alive = false;
+    this.assistantReplyUnsubscribe?.(); this.assistantReplyUnsubscribe = undefined;
+    this.assistantReplyController?.dispose(); this.assistantReplyController = undefined;
+  }
   private onCardOpen(): void {
     // 提交进行中不抢导航：等落盘结束后再回到今日，避免把正在保存的草稿丢掉。
     if (this.navigating()) { this.commitLock.deferCardOpen(); return; }
@@ -398,6 +408,21 @@ struct Index {
     this.openSheet('assistant');
   }
 
+  // 推荐与保存仍由 Index 持有；计时器只发布消息的可见前缀，不能延迟或重放业务操作。
+  private setupAssistantReplies(scheduler?: AssistantReplyScheduler): void {
+    if (this.assistantReplyController !== undefined) { return; }
+    const controller: AssistantReplyController = new AssistantReplyController(scheduler);
+    this.assistantReplyController = controller;
+    this.assistantReplyUnsubscribe = controller.subscribe((view: AssistantReplyView) => {
+      if (this.alive && this.foreground && this.showSheet && this.sheet === 'assistant' &&
+        this.assistantContext.key === this.dadaContext().key) { this.assistantReply = view; }
+    });
+  }
+
+  private cancelAssistantReply(): void {
+    this.assistantReplyController?.cancel(); this.assistantReply = emptyAssistantReply();
+  }
+
   private dadaVisualState(): DadaState {
     if (this.mainRoute === 'tryOn' && presentationRunning(this.tryOnStage)) {
       return this.tryOnStage === TryOnStage.REVEALING ? DadaState.COMPLETE : DadaState.WORKING;
@@ -412,6 +437,7 @@ struct Index {
 
   private onDadaForegroundChanged(): void {
     if (this.foreground) { return; }
+    this.cancelAssistantReply();
     // 面板关闭与后台回调可能交错；后台丢弃尚未启动的请求，回来后必须由用户重新点击。
     this.pendingDadaAction = undefined; this.pendingDadaInput = '';
     this.tryOnCommand = { id: 0, action: 'start', sceneId: this.tryOnSceneId };
@@ -419,12 +445,16 @@ struct Index {
 
   private addAgentMessage(role: AssistantMessageRole, text: string): void {
     this.agentMessageSequence++;
-    this.agentMessages = this.agentMessages.concat([{ id: `agent_${this.agentMessageSequence}`,
+    const id: string = `agent_${this.agentMessageSequence}`;
+    this.agentMessages = this.agentMessages.concat([{ id: id,
       role: role, text: text }]);
+    if (role === AssistantMessageRole.ASSISTANT && this.alive && this.foreground &&
+      this.showSheet && this.sheet === 'assistant') { this.assistantReplyController?.start(id, text); }
   }
 
   private submitAssistant(input: string): void {
-    if (this.assistantBusy || this.recognizingImportTaskId.length > 0 || input.trim().length === 0) { return; }
+    if (this.assistantBusy || assistantReplyActive(this.assistantReply) ||
+      this.recognizingImportTaskId.length > 0 || input.trim().length === 0) { return; }
     if (this.assistantContext.key !== this.dadaContext().key) {
       this.dadaFeedback = '当前页面内容已变化，请关闭后重新打开搭搭。'; return;
     }
@@ -471,7 +501,8 @@ struct Index {
 
   private async applyAgentOutfit(look: Outfit): Promise<void> {
     const proposal: AssistantProposal | undefined = this.assistantProposal;
-    if (this.assistantBusy || this.readBlocked || this.businessBusy() || proposal === undefined) { return; }
+    if (this.assistantBusy || assistantReplyActive(this.assistantReply) ||
+      this.readBlocked || this.businessBusy() || proposal === undefined) { return; }
     if (proposal.contextKey !== this.dadaContext().key || !proposal.outfits.some((item: Outfit) => item.id === look.id)) {
       this.dadaFeedback = '这份建议已经过期，请重新提问。'; this.dadaState = DadaState.ERROR; return;
     }
@@ -507,7 +538,8 @@ struct Index {
   }
 
   private dadaAction(action: DadaAction, input: string): void {
-    if (this.assistantBusy || this.navigating() || this.assistantContext.key !== this.dadaContext().key) { return; }
+    if (this.assistantBusy || assistantReplyActive(this.assistantReply) || this.navigating() ||
+      this.assistantContext.key !== this.dadaContext().key) { return; }
     const page: DadaPage = this.assistantContext.page;
     if (action === DadaAction.GUIDE) { this.addAgentMessage(AssistantMessageRole.ASSISTANT, dadaGuide(page)); return; }
     if (page === DadaPage.IMPORT) {
@@ -548,6 +580,7 @@ struct Index {
   }
 
   private onSheetClosed(): void {
+    if (this.sheet === 'assistant') { this.cancelAssistantReply(); }
     // 只在添加表单消失时回收它拥有的临时图片；搭搭面板必须保留所有页面草稿。
     if (this.sheet === 'add') { this.clearDraft(); }
     const action: DadaAction | undefined = this.pendingDadaAction;
@@ -1279,14 +1312,9 @@ struct Index {
       const usable: boolean = result.colorSource === RECOGNITION_SOURCE_PIXEL_COLOR && result.color.length > 0;
       // 模型是通用多标签分类器，只给少数可映射到衣橱的品类候选；用户自行确认。
       const categoryIndex: number = candidate === undefined ? -1 : CATEGORIES.indexOf(candidate.category);
-      let message: string = recognitionSummary(result);
-      if (candidate !== undefined) {
-        const candidateMessage: string =
-          `端侧模型候选：${candidate.subcategory}（${candidate.label}，模型分 ${Math.round(candidate.score * 100)}%，请核对）。`;
-        // 没有像素主色时，recognitionSummary 会返回“暂无建议”。此时已有
-        // 模型候选，应直接展示候选，避免用户同时看到互相矛盾的两句话。
-        message = message.indexOf('暂无可用建议') >= 0 ? candidateMessage : `${message} ${candidateMessage}`;
-      }
+      // 算法来源和分数留在服务与检查中；界面只展示可确认的建议，不能把分数包装成正确率。
+      const message: string = usable || categoryIndex >= 0
+        ? '可以参考下面的建议，采用前请核对实物。' : '这张照片暂时没有清晰的建议，可以换图或手动填写。';
       const hint: ImportRecognitionHint = { taskId: taskId, revision: revision, originalUri: originalUri,
         color: usable ? result.color : '', categoryIndex: categoryIndex,
         subcategory: candidate === undefined ? '' : candidate.subcategory, message: message };
@@ -2298,7 +2326,6 @@ struct Index {
       onOpenDiy: () => { this.openStudio(); },
       onOpenDiary: () => { this.openRoute('diary'); },
       onOpenTryOn: () => { this.openTryOn(); },
-      onOpenAssistant: () => { this.openAssistant(); },
       onSaveOutfit: (look: Outfit) => { this.saveLook(look); },
       onRecordLook: (look: Outfit) => { this.beginWear(look); },
       onOpenProfile: () => { this.switchTab(3); },
@@ -2781,6 +2808,25 @@ struct Index {
 
   @Builder
   private sheetContent() {
+    if (this.sheet === 'assistant') {
+      // 对话区与输入区由助手自己分配高度；不能再套外层 Scroll，否则输入栏会随历史消息滚走。
+      AssistantSheet({
+        messages: this.agentMessages, reply: this.assistantReply,
+        outfits: this.agentOutfits, garments: this.garments, context: this.assistantContext,
+        state: this.recognizingImportTaskId.length > 0 ? DadaState.WORKING : this.dadaState,
+        feedback: this.dadaFeedback,
+        busy: this.assistantBusy || this.recognizingImportTaskId.length > 0 || presentationRunning(this.tryOnStage),
+        recognitionMessage: this.importRecognitionHint()?.message || '',
+        recognitionColor: this.importRecognitionHint()?.color || '',
+        recognitionCategory: this.importRecognitionHint()?.subcategory || '',
+        onClose: () => { this.cancelAssistantReply(); this.showSheet = false; },
+        onSubmit: (input: string) => { this.submitAssistant(input); },
+        onApply: (look: Outfit) => { this.applyAgentOutfit(look).catch(() => {}); },
+        onAction: (action: DadaAction, input: string) => { this.dadaAction(action, input); }
+      }).width('100%').height('100%')
+        .opacity(this.sheetEntered ? 1 : 0).translate({ y: this.sheetEntered ? 0 : 24 })
+        .animation({ duration: 280, curve: Curve.FastOutSlowIn })
+    } else {
     Scroll() {
       Column() {
         if (this.sheet === 'detail') { this.detailSheet() }
@@ -2791,22 +2837,6 @@ struct Index {
         else if (this.sheet === 'transfer') { SyncTransferSheet({
           onExport: () => this.exportMigration(),
           onImport: () => this.importMigration() }) }
-        else if (this.sheet === 'assistant') { AssistantSheet({
-          messages: this.agentMessages,
-          outfits: this.agentOutfits,
-          garments: this.garments,
-          context: this.assistantContext,
-          state: this.recognizingImportTaskId.length > 0 ? DadaState.WORKING : this.dadaState,
-          feedback: this.dadaFeedback,
-          busy: this.assistantBusy || this.recognizingImportTaskId.length > 0 || presentationRunning(this.tryOnStage),
-          recognitionMessage: this.importRecognitionHint()?.message || '',
-          recognitionColor: this.importRecognitionHint()?.color || '',
-          recognitionCategory: this.importRecognitionHint()?.subcategory || '',
-          onSubmit: (input: string) => { this.submitAssistant(input); },
-          onQuick: (input: string) => { this.submitAssistant(input); },
-          onApply: (look: Outfit) => { this.applyAgentOutfit(look).catch(() => {}); },
-          onAction: (action: DadaAction, input: string) => { this.dadaAction(action, input); }
-        }) }
         else if (this.sheet === 'city') {
           CityPickerSheet({ currentCity: this.city, currentTemperature: this.temperature,
             weatherAvailable: this.weather.available, weatherSource: this.weather.source,
@@ -2821,6 +2851,7 @@ struct Index {
       .opacity(this.sheetEntered ? 1 : 0)
       .translate({ y: this.sheetEntered ? 0 : 24 })
       .animation({ duration: 280, curve: Curve.FastOutSlowIn })
+    }
   }
 
   // 顶部两个悬浮胶囊：左（品牌）、右（添加），
@@ -2956,7 +2987,9 @@ struct Index {
       // 试穿与偏好测验内容较长用大尺寸；其余弹层内容较短，用中尺寸避免大片空白。
       .bindSheet($$this.showSheet, this.sheetContent,
         { height: this.sheet === 'detail' ? SheetSize.MEDIUM : SheetSize.LARGE,
-          showClose: true, systemMaterial: sheetMaterial(), onDisappear: () => this.onSheetClosed() })
+          showClose: this.sheet !== 'assistant', systemMaterial: sheetMaterial(),
+          keyboardAvoidMode: this.sheet === 'assistant' ? SheetKeyboardAvoidMode.RESIZE_ONLY
+            : SheetKeyboardAvoidMode.TRANSLATE_AND_RESIZE, onDisappear: () => this.onSheetClosed() })
   }
 
   // 底部悬浮页签 + 页面内容把

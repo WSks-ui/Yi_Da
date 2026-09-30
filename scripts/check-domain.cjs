@@ -26,6 +26,7 @@ const { ImportPhase, ImportFailureStep, createImportItem } = require('../entry/s
 const { SnapshotCommit } = require('../entry/src/main/ets/service/SnapshotCommit.ets');
 const { ImportSession } = require('../entry/src/main/ets/service/GarmentImportRunner.ets');
 const { GarmentImportController } = require('../entry/src/main/ets/service/GarmentImportController.ets');
+require('./check-assistant-reply.cjs');
 
 test('旧收藏生成画布布局，持久化往返后位置、层级和颜色不变', () => {
   const layout = normalizeLayout(undefined, ['tee', 'jeans', 'shoes']);
