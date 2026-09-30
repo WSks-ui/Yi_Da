@@ -46,16 +46,16 @@
 | 功能 | 当前实现 |
 | --- | --- |
 | 今日 | 天气条（真实天气取不到时退回手动温度并说明来源）、衣橱入口、今日穿搭与搭配 DIY 小卡、八宫格快捷入口、今日推荐、最近日记 |
-| 智能助手 | 离线自然语言入口：识别上课/展示/社团/约会、温度和“换一件上装”等指令，调用现有推荐规则生成方案；不依赖云端模型，不伪造开放问答能力 |
+| 搭搭助手 | 各页顶栏统一光团入口，按当前页面提供推荐、图片建议、样片演示或操作引导；连续追问只更新候选，点击“采用这套”后先落盘再发布当前搭配 |
 | 衣橱 | 搜索、品类与状态筛选、季节/标签检索、详情、五种状态切换（可穿/待洗/收纳/季节隐藏/已归档）、多选批量修改、单件“多推荐/少推荐/中性”反馈、紧凑与舒适两档视图 |
 | 批量录入 | 可从系统相册选图，也可直接选择 3 张随包示例照片；同一次录入最多 10 张，逐件确认名称/品类/颜色/适穿温度/场合；可运行随包 MindSpore Lite MobileNetV2 ImageNet 模型给出少量可映射衣物类别候选，并分析图片像素主色，均由用户决定是否采用；可搜索 70 多种细类并手填材质；失败可重试或跳过 |
 | 搭配工作台 | DIY 自由画布：拖动、缩放、旋转、调整层级、撤销重做、选择底色，最多 8 件；方案命名保存后可回到原画布继续编辑 |
 | 搭配详情 | 单件替换、锁定与排除、收藏、记录穿着、进入画布、导出与分享 |
 | 穿搭日记 | 佩戴日历（可翻月、标记有记录日期）、当天记录、从搭配或单品添加、文字与感受；同日同组合去重，删除会撤销计数 |
-| AI 试穿（离线演示） | 三组不同服装的固定正面样片，支持模拟处理状态、原图/结果/并排对比、保存记录、导出相册与系统分享；侧面和背面显示待素材，不伪造三姿势 |
+| AI 试穿（离线演示） | 三组配套素材，搭搭播放约六秒的四阶段交互过程；支持取消、重播、原图对比、保存记录、导出相册与系统分享；全程固定显示“固定离线样片 · 非实时生成”，侧面和背面暂无图片并禁用 |
 | 我的 | 会员体验剩余天数、衣橱完善度进度、穿搭档案与身材色彩档案入口、试穿记录、桌面卡片管理、手动离线迁移 |
 | 穿搭偏好测验 | 6 道题、可多选、可跳过、可修改；档案只调整推荐顺序，不排除衣物 |
-| 推荐 | 本地规则生成最多 3 套不同搭配，先按状态/温度/场合过滤，再按单件反馈、偏好、已填写体型信息与穿着次数排序；有可穿配饰时自动加入；首页卡片支持收藏和记录已穿 |
+| 推荐 | 本地规则生成最多 3 套不同候选，先按状态/温度/场合过滤，再按单件反馈、偏好、体型信息与穿着次数排序；已采用的其它合法组合仍保留为当前选择；首页支持收藏和记录已穿 |
 | 导出与分享 | 搭配画布导出 PNG、保存到系统相册、原生 Share Kit 分享文字清单 |
 | 桌面卡片 | FormExtensionAbility、LiveFormExtensionAbility、点击展开直达应用；API 26 摇一摇配置 |
 | 沉浸光感 | 卡片与浮层使用 `uiMaterial.ImmersiveMaterial` + `systemMaterial()`，带光感交互反馈；模拟器实测材质等级 EXQUISITE |
@@ -68,12 +68,12 @@
 
 ## 构建
 
-本机 DevEco Studio 安装目录为 `D:\Software\DevEco Studio`，内置 SDK 为 `26.0.0.105 Release`。
+本轮构建使用 `D:\DevEco Studio 2\DevEco Studio`，内置 SDK 为 `26.0.0.105 Release`。脚本也支持传入其它安装目录。
 
-Pura 90 Pro 模拟器启动时应使用 `-hdcPort 10000`，设备目标为 `127.0.0.1:10000`；DevEco 的模拟器 HDC 端口范围是 `10000–16555`，不能使用 `5555`。
+设备目标以 SDK 的 `hdc list targets` 实际输出为准。本轮 Pura 90 Pro 的目标是 `127.0.0.1:5555`，此前也有使用 `127.0.0.1:10000` 的实例；不要把端口写成所有环境必须遵守的固定值。设备脚本自动查找本机的两种已用 SDK 路径，也可通过 `YIDA_HDC_PATH` 指定 `hdc.exe`。
 
 ```powershell
-.\scripts\build.ps1
+.\scripts\build.ps1 -DevEcoHome 'D:\DevEco Studio 2\DevEco Studio'
 ```
 
 其他安装目录：
@@ -89,19 +89,19 @@ Pura 90 Pro 模拟器启动时应使用 `-hdcPort 10000`，设备目标为 `127.
 ## 已运行检查
 
 ```powershell
-node scripts/check-domain.cjs          # 105 项，包含 Index 与 WeatherService 接线检查
-node scripts/check-index.cjs           # 41 项（已包含在 check-domain 中）
+node scripts/check-domain.cjs          # 127 项，包含 Index、天气与试穿过程接线
+node scripts/check-index.cjs           # 52 项（已包含在 check-domain 中）
 node scripts/check-weather.cjs         # 4 项（已包含在 check-domain 中）
-node scripts/check-ai.cjs              # 13 项
+node scripts/check-presentation.cjs    # 11 项（已包含在 check-domain 中）
+node scripts/check-ai.cjs              # 16 项，含静态 Kit 图片颜色接线
 node scripts/check-agent.cjs           # 4 项，助手意图与真实推荐接线
 node scripts/check-sync.cjs            # 9 项
 node scripts/check-migration.cjs       # 7 项
 node scripts/check-migration-host.cjs  # 5 项
 ```
 
-- **业务检查 105 项**：推荐硬约束、单件推荐反馈、配饰候选、季节/标签批量整理、批量录入、试穿演示、迁移提交、天气回退、Open-Meteo 备选链路及页面接线；另有助手专项检查 4 项。
-- **页面探针 40 项**：用 AST 执行 `Index.ets` 的真实方法，覆盖提交顺序、导入、试穿、身材档案、手动迁移与天气交错。
-- **专项检查 36 项**：识别、端侧模型输入契约、同步状态机、图片迁移包、文件系统与 Picker 宿主适配器。另有天气接线 4 项已计入业务检查；均未代替真机验收。
+- **业务检查 127 项**：含真实 `Index` 接线 52 项、天气 4 项、试穿过程 11 项，覆盖候选不改快照、采用先落盘后发布、失败重试、天气交错、过期建议、六秒时序与生命周期取消。
+- **专项检查 41 项**：图片与端侧识别 16、助手意图 4、同步 9、迁移包 7、Picker 宿主 5。与业务检查合计 168 项；没有重复累加已包含的页面或过程检查。
 - 检查直接转译并执行项目的 `.ets` 业务源文件，**不替代** ArkUI、系统 API 或真机测试。
 - 若本机没有 `node_modules/typescript`，可传入 DevEco 自带的 `typescript` 路径作为第一个参数。
 
@@ -111,6 +111,7 @@ node scripts/check-migration-host.cjs  # 5 项
 .\scripts\dump-ui.ps1                  # 当前页面的文本与可点击元素
 .\scripts\dump-ui.ps1 -ClickableOnly   # 只看可点击元素
 .\scripts\capture-demo.ps1             # 按演示路径自动抓取截图到 artifacts\demo
+.\scripts\capture-dada-tryon.ps1       # 在试穿页拍五张实际阶段截图并记录拍摄时间，不保存记录
 ```
 
 `capture-demo.ps1` 会真实操作应用：温度通过在滑块上点击并读取滑块自身数值来确认，控件位置全部从实时布局读取，每一步都校验预期文本，失败即报错而不是产出错图。
@@ -223,8 +224,10 @@ entry/src/main/ets/
 
 | 路径 | 用途 |
 | --- | --- |
-| `scripts/check-domain.cjs` | 104 项业务检查，直接转译生产 `.ets` 源文件 |
-| `scripts/check-index.cjs` | 29 项页面探针，AST 与生产 `Index.ets` 同一份实现 |
+| `scripts/check-domain.cjs` | 127 项业务检查，直接转译生产 `.ets` 源文件 |
+| `scripts/check-index.cjs` | 52 项页面探针，AST 与生产 `Index.ets` 同一份实现 |
+| `scripts/check-presentation.cjs` | 11 项真实控制器、页面命令与同组素材导出检查 |
+| `scripts/check-recognition-image.cjs` | 3 项静态 Kit 图片读取与资源释放检查，已计入识别检查 |
 | `scripts/build.ps1` | 命令行构建（不改 SDK、包名与签名配置） |
 | `scripts/dump-ui.ps1` | 读取设备当前界面，核对可见文本与可点击位置 |
 | `scripts/capture-demo.ps1` | 按演示路径自动抓图 |
@@ -234,6 +237,7 @@ entry/src/main/ets/
 | `docs/DEVELOPMENT_STATUS.md` | 各阶段进度、验证结果与**未验证项** |
 | `docs/DESIGN_NOTES.md` | 配色、布局、沉浸光感、动画与联调手记 |
 | `docs/TRYON_DEMO.md` | 试穿演示的代码边界与素材来源 |
+| `docs/DADA_DEMO_HANDOFF.md` | 搭搭拍摄路径、真实能力边界、包与截图交接说明 |
 | `docs/ASSETS.md` | 内置示例衣物图片来源（Unsplash） |
 | `docs/COMPETITION_PLAN.md` | 竞品参考、鸿蒙能力与排期 |
 | `docs/images/` | README 截图（由 `artifacts/` 缩放导出，入库以便协作者直接查看） |
