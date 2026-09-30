@@ -867,3 +867,4 @@ function settle(times = 6) {
 // 页面回归测试使用 AST Probe，实际方法与生产 Index.ets 保持同一份源码。
 require('./check-index.cjs');
 require('./check-weather.cjs');
+require('./check-presentation.cjs');

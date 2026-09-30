@@ -14,8 +14,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$hdcExe = 'D:\Software\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe'
-if (-not (Test-Path $hdcExe)) { throw "hdc.exe not found: $hdcExe" }
+. "$PSScriptRoot\device-lib.ps1"
+$hdcExe = $script:HdcExe
 
 $stamp = Get-Date -Format 'HHmmssfff'
 $remote = "/data/local/tmp/yida-$stamp.json"
@@ -39,11 +39,12 @@ $tree = $raw.Substring($start, $end - $start + 1) | ConvertFrom-Json
 function Show-Node($node) {
     $a = $node.attributes
     if ($null -eq $a) { return }
-    $hasText = -not [string]::IsNullOrWhiteSpace($a.text)
+    $label = if ($a.originalText) { $a.originalText } else { $a.text }
+    $hasText = -not [string]::IsNullOrWhiteSpace($label)
     $isClickable = $a.clickable -eq 'true'
     if ($a.visible -eq 'true' -and (($hasText -and -not $ClickableOnly) -or $isClickable)) {
         $tag = if ($isClickable) { 'CLICK' } else { '     ' }
-        '{0} | {1,-9} | {2} | {3}' -f $tag, $a.type, $a.bounds, $a.text
+        '{0} | {1,-9} | {2} | {3}' -f $tag, $a.type, $a.bounds, $label
     }
     foreach ($child in $node.children) { Show-Node $child }
 }

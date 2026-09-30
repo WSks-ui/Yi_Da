@@ -285,3 +285,5 @@ test('NeuralInference 可替换 provider，provider 成功时不标记为降级'
   assert.equal(result.usedFallback, false);
   assert.deepEqual(result.scores, [0.2, 0.4]);
 });
+
+require('./check-recognition-image.cjs');

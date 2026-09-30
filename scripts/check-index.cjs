@@ -25,6 +25,9 @@ const SYNC = require('../entry/src/main/ets/service/WardrobeSync.ets');
 const MIGRATION = require('../entry/src/main/ets/service/WardrobeMigration.ets');
 const GI = require('../entry/src/main/ets/service/GarmentImport.ets');
 const RECOGNITION = require('../entry/src/main/ets/service/GarmentRecognition.ets');
+const DADA = require('../entry/src/main/ets/service/DadaContext.ets');
+const PRESENTATION = require('../entry/src/main/ets/service/TryOnPresentationController.ets');
+const AGENT = require('../entry/src/main/ets/service/OutfitAgent.ets');
 
 const INDEX_SOURCE_PATH = path.resolve(__dirname, '../entry/src/main/ets/pages/Index.ets');
 const INDEX_SOURCE = fs.readFileSync(INDEX_SOURCE_PATH, 'utf8');
@@ -106,6 +109,10 @@ function makeIndexProbe() {
     ...TRY_ON_DEMO,
     ...SYNC,
     ...MIGRATION,
+    ...DADA,
+    ...PRESENTATION,
+    ...AGENT,
+    AssistantMessageRole: { USER: 'user', ASSISTANT: 'assistant' },
     recognitionSummary: RECOGNITION.recognitionSummary,
     RECOGNITION_SOURCE_PIXEL_COLOR: RECOGNITION.RECOGNITION_SOURCE_PIXEL_COLOR,
     garmentModel: { classify: async () => undefined },
@@ -892,16 +899,6 @@ test('真实 Index：各试穿入口统一走 openTryOn，并向页面传递 ini
   assert.match(INDEX_SOURCE, /initialSceneId: this\.tryOnSceneId/);
 });
 
-test('试穿演示：只延迟返回选中场景的固定正面样片，并拒绝未知场景', async () => {
-  const waits = [];
-  const result = await TRY_ON_DEMO.simulateTryOnDemo('navy_top', async (milliseconds) => {
-    waits.push(milliseconds);
-  });
-  assert.deepEqual(waits, [900], '模拟状态应经过可见等待，但测试不依赖真实定时器');
-  assert.deepEqual(result, { sceneId: 'navy_top', poseId: 'front', status: 'preset-demo' });
-  await assert.rejects(TRY_ON_DEMO.simulateTryOnDemo('unknown', async () => {}), /未知/);
-});
-
 test('试穿演示：三姿势资源契约只声明已有正面素材，不混用其他样片', () => {
   assert.deepEqual(TRY_ON_DEMO.DEMO_POSES.map((pose) => pose.id), ['front', 'side', 'back']);
   const mediaSource = fs.readFileSync(
@@ -1069,4 +1066,198 @@ test('真实 Index：只读恢复导入后完成一次清理并解除新导入�
   assert.equal(page.sweepDone, true);
   assert.equal(page.orphanSwept, true);
   assert.equal(sweepCount, 1, '恢复导入后不应再次启动异步清理');
+});
+
+function makeDadaPage(options = {}) {
+  const harness = makeIndexPage({ ...options, mainRoute: 'tabs' });
+  harness.page.restore(require('../entry/src/main/ets/data/DemoData.ets').initialSnapshot());
+  harness.page.openAssistant();
+  return harness;
+}
+
+test('真实搭搭接线：发送指令只发布聊天候选，连续追问沿用候选场合与温度', () => {
+  const { page, repository } = makeDadaPage();
+  // 正式场合的默认衣橱只有一件可用上装；补入第二件真实可选项，验证实际替换而非无替代品分支。
+  const model = require('../entry/src/main/ets/model/Wardrobe.ets');
+  const top = page.garments.find(x => x.category === model.Category.TOP && x.occasions.includes('课程展示') && x.maxTemp >= 26);
+  page.garments = page.garments.concat([{ ...top, id: 'formal_alternative' }]);
+  const before = JSON.stringify(page.snapshot());
+  page.submitAssistant('课程展示，26度');
+  assert.equal(page.assistantProposal.occasion, '课程展示');
+  assert.equal(page.assistantProposal.temperature, 26);
+  assert.ok(page.agentOutfits.length > 0);
+  const previous = page.agentLatestOutfit;
+  page.submitAssistant('换一件上装');
+  assert.equal(page.assistantProposal.occasion, '课程展示');
+  assert.equal(page.assistantProposal.temperature, 26);
+  const garments = require('../entry/src/main/ets/model/Wardrobe.ets');
+  const oldTop = previous.garmentIds.find(id => page.garments.find(x => x.id === id).category === garments.Category.TOP);
+  assert.ok(!page.agentLatestOutfit.garmentIds.includes(oldTop), '换上装确实使用上轮候选');
+  page.submitAssistant('再来一套');
+  assert.equal(page.assistantProposal.temperature, 26);
+  assert.equal(JSON.stringify(page.snapshot()), before);
+  assert.equal(repository.saveCalls.length, 0);
+  assert.ok(page.agentMessages.some(x => x.text === DADA.DADA_WELCOME));
+});
+
+test('真实搭搭接线：采用先落盘后发布和刷新卡片，连点只提交一次且保留天气来源', async () => {
+  const gate = deferred();
+  const { page, repository } = makeDadaPage({ saveHandler: () => gate.promise });
+  const before = JSON.stringify(page.snapshot());
+  const weather = { available: true, city: '上海', condition: '晴', tempMin: 21, tempMax: 25, source: '真实天气' };
+  page.weather = weather;
+  let cardCount = 0;
+  page.refreshCard = () => { cardCount++; assert.equal(repository.disk.length, 1); };
+  page.submitAssistant('课程展示，26度');
+  const look = page.agentOutfits[0];
+  const pending = page.applyAgentOutfit(look);
+  await page.applyAgentOutfit(look); await flushMicrotasks();
+  assert.equal(JSON.stringify(page.snapshot()), before);
+  assert.equal(repository.saveCalls.length, 1); assert.equal(cardCount, 0);
+  gate.resolve(); await pending;
+  assert.equal(page.occasion, '课程展示'); assert.equal(page.temperature, 26);
+  assert.deepEqual(page.activeIds, look.garmentIds);
+  assert.deepEqual(repository.disk[0].activeIds, page.activeIds);
+  assert.equal(page.showSheet, false); assert.equal(cardCount, 1);
+  assert.deepEqual(page.weather, weather); assert.equal(repository.disk[0].city, JSON.parse(before).city);
+});
+
+test('真实搭搭接线：采用失败不发布，候选保留且原入口重试使用最新快照', async () => {
+  let fail = true;
+  const { page, repository } = makeDadaPage({ saveHandler: () => {
+    if (fail) { fail = false; throw new Error('空间不足'); }
+  } });
+  const before = JSON.stringify(page.snapshot());
+  page.submitAssistant('课程展示，26度'); const proposal = page.assistantProposal;
+  await page.applyAgentOutfit(page.agentOutfits[0]);
+  assert.equal(JSON.stringify(page.snapshot()), before); assert.equal(repository.disk.length, 0);
+  assert.equal(page.assistantProposal, proposal); assert.equal(page.showSheet, true);
+  assert.equal(page.dadaState, DADA.DadaState.ERROR); assert.equal(typeof page.pendingRetry, 'function');
+  page.retryPersist(); await flushMicrotasks(30);
+  assert.equal(page.temperature, 26); assert.equal(repository.disk.length, 1);
+  assert.equal(page.showSheet, false);
+});
+
+test('真实搭搭接线：采用落盘期间天气延后应用，补存与内存一致且不丢衣橱', async () => {
+  const gate = deferred(); let calls = 0;
+  const { page, repository } = makeDadaPage({ saveHandler: () => ++calls === 1 ? gate.promise : Promise.resolve() });
+  page.submitAssistant('课程展示，26度'); const look = page.agentOutfits[0];
+  const pending = page.applyAgentOutfit(look); await flushMicrotasks(); page.applyTemperature(18);
+  assert.notEqual(page.temperature, 18); gate.resolve(); await pending; await flushMicrotasks(30);
+  assert.equal(repository.disk[0].temperature, 26);
+  assert.deepEqual(repository.disk[0].activeIds, look.garmentIds);
+  assert.equal(repository.disk.at(-1).temperature, 18);
+  assert.deepEqual(repository.disk.at(-1), page.snapshot());
+  assert.equal(repository.disk.at(-1).garments.length, page.garments.length);
+});
+
+test('真实搭搭接线：建议必须属于本轮且符合最新衣物状态，过期重试不得跨页执行', async () => {
+  const { page, repository } = makeDadaPage();
+  page.submitAssistant('课程展示，26度'); const look = page.agentOutfits[0];
+  await page.applyAgentOutfit({ ...look, id: '伪造方案' }); assert.equal(repository.saveCalls.length, 0);
+  page.garments = page.garments.map(item => item.id === look.garmentIds[0] ? { ...item, status: '待洗' } : item);
+  await page.applyAgentOutfit(look); assert.equal(repository.saveCalls.length, 0);
+  page.mainRoute = 'diary'; await page.applyAgentOutfit(look);
+  assert.equal(repository.saveCalls.length, 0);
+
+  const failed = makeDadaPage({ saveHandler: () => Promise.reject(new Error('空间不足')) });
+  failed.page.submitAssistant('课程展示，26度'); await failed.page.applyAgentOutfit(failed.page.agentOutfits[0]);
+  failed.page.mainRoute = 'diary'; failed.page.retryPersist(); await flushMicrotasks();
+  assert.equal(failed.repository.saveCalls.length, 1);
+});
+
+test('真实搭搭接线：采用确切合法组合而非调用参数中的替换衣物', async () => {
+  const { page, repository } = makeDadaPage(); page.submitAssistant('课程展示，26度');
+  const look = page.agentOutfits[0];
+  await page.applyAgentOutfit({ ...look, garmentIds: ['不存在的衣物'] });
+  assert.deepEqual(repository.disk[0].activeIds, look.garmentIds);
+});
+
+test('真实搭搭接线：推荐前三名之外的合法组合采用和重启后仍为同一套', async () => {
+  const { page, repository } = makeDadaPage();
+  const engine = require('../entry/src/main/ets/service/OutfitEngine.ets');
+  const model = require('../entry/src/main/ets/model/Wardrobe.ets');
+  const request = page.request(); request.temperature = 26;
+  const top = page.garments.find(x => x.category === model.Category.TOP && engine.eligible(x, request));
+  page.garments = page.garments.concat([1, 2, 3, 4].map(index =>
+    ({ ...top, id: 'top_alternative_' + index, wearCount: 100 + index })));
+  const items = [model.Category.TOP, model.Category.BOTTOM, model.Category.SHOES].map(category =>
+    page.garments.filter(item => item.category === category && engine.eligible(item, request)).at(-1));
+  const look = engine.makeOutfit(items, request, page.profile);
+  assert.ok(!engine.recommend(page.garments, request).outfits.some(x => x.id === look.id));
+  page.assistantProposal = { id: 1, contextKey: page.dadaContext().key, occasion: look.occasion,
+    temperature: look.temperature, outfits: [look] };
+  await page.applyAgentOutfit(look);
+  assert.deepEqual(page.activeIds, look.garmentIds); assert.deepEqual(page.plans[0].garmentIds, look.garmentIds);
+  const restarted = makeDadaPage(); restarted.page.restore(repository.disk[0]);
+  assert.deepEqual(restarted.page.activeIds, look.garmentIds);
+  assert.deepEqual(restarted.page.plans[0].garmentIds, look.garmentIds);
+});
+
+test('真实搭搭接线：系统弹窗和其它表单打开时不再打开助手，关闭助手不回收草稿图片', () => {
+  const { page, repository } = makeDadaPage();
+  page.draftImages = ['file://sandbox/form.png']; page.draft.uri = 'file://sandbox/form.png';
+  page.onSheetClosed(); assert.deepEqual(page.draftImages, ['file://sandbox/form.png']);
+  assert.deepEqual(repository.discarded, []);
+  page.sheet = 'add'; page.showSheet = true; page.openAssistant(); assert.equal(page.sheet, 'add');
+  page.showSheet = false; page.importExitDialogOpen = true; page.openAssistant(); assert.equal(page.showSheet, false);
+  page.importExitDialogOpen = false; page.importing = true; page.openAssistant(); assert.equal(page.showSheet, false);
+});
+
+test('真实搭搭接线：试穿请求在面板消失后分派一次，后台或上下文变化使未启动请求失效', () => {
+  const { page } = makeDadaPage(); page.showSheet = false; page.openTryOn(); page.openAssistant();
+  page.dadaAction(DADA.DadaAction.TRY_ON, 'red_dress');
+  assert.equal(page.showSheet, false); assert.equal(page.tryOnCommand.id, 0);
+  page.onSheetClosed(); const command = { ...page.tryOnCommand }; page.onSheetClosed();
+  assert.deepEqual(page.tryOnCommand, command); assert.equal(command.id, 1); assert.equal(command.sceneId, 'red_dress');
+  page.openAssistant(); page.dadaAction(DADA.DadaAction.TRY_ON, 'navy_top');
+  page.foreground = false; page.onDadaForegroundChanged(); page.onSheetClosed();
+  assert.equal(page.tryOnCommand.id, 0); assert.equal(page.tryOnCommandSequence, 1);
+  page.foreground = true; page.openAssistant(); page.dadaAction(DADA.DadaAction.TRY_ON, 'navy_top');
+  page.mainRoute = 'diary'; page.onSheetClosed(); assert.equal(page.tryOnCommand.id, 0);
+});
+
+test('真实搭搭接线：录入期间拒绝跨页指令，颜色与品类分别确认且保存仍由原按钮触发', async () => {
+  const { page, repository } = makeIndexPage(); await prepareIndexImport(page, repository, ['photo-a', 'photo-b']);
+  page.openAssistant(); const item = page.importItems[0];
+  page.importRecognitionHints = [{ taskId: item.id, revision: item.revision, originalUri: item.originalUri,
+    color: '红色', categoryIndex: 0, subcategory: 'T恤', message: '请确认建议' }];
+  page.dadaAction(DADA.DadaAction.TRY_ON, 'navy_top'); assert.equal(page.mainRoute, 'garmentImport');
+  assert.equal(page.pendingDadaAction, undefined);
+  page.dadaAction(DADA.DadaAction.USE_COLOR, '');
+  assert.equal(page.importItems[0].draft.color, '红色'); assert.equal(page.importItems[0].draft.categoryIndex, -1);
+  page.dadaAction(DADA.DadaAction.USE_CATEGORY, '');
+  assert.equal(page.importItems[0].draft.categoryIndex, 0); assert.equal(page.importItems[0].draft.subcategory, 'T恤');
+  assert.equal(repository.saveCalls.length, 0); assert.equal(page.importItems[1].draft.color, '');
+  page.importMove(1); page.dadaAction(DADA.DadaAction.USE_COLOR, '');
+  assert.equal(page.importItems[1].draft.color, '');
+});
+
+test('真实搭搭接线：建议绑定 taskId/原图/revision，失效、终态和只读状态均不能采用', async () => {
+  const { page, repository } = makeIndexPage(); const session = await prepareIndexImport(page, repository, ['photo-a']);
+  page.openAssistant(); const item = page.importItems[0];
+  const hint = { taskId: item.id, revision: item.revision, originalUri: item.originalUri,
+    color: '红色', categoryIndex: 0, subcategory: 'T恤', message: '请确认建议' };
+  for (const stale of [{ ...hint, taskId: 'old' }, { ...hint, originalUri: 'old' }, { ...hint, revision: hint.revision - 1 }]) {
+    page.importRecognitionHints = [stale]; page.useRecognizedColor(0); page.useRecognizedCategory(0);
+    assert.equal(page.importItems[0].draft.color, ''); assert.equal(page.importItems[0].draft.categoryIndex, -1);
+  }
+  page.importRecognitionHints = [hint]; page.readBlocked = true; page.dadaAction(DADA.DadaAction.USE_COLOR, '');
+  assert.equal(page.importItems[0].draft.color, ''); page.readBlocked = false;
+  session.skip(page.importHost(), item.id); page.useRecognizedColor(0);
+  assert.equal(page.importItems[0].phase, ImportPhase.SKIPPED); assert.equal(repository.saveCalls.length, 0);
+});
+
+test('真实搭搭接线：分析失败可重试，退出后迟到结果不进入新会话', async () => {
+  const { page, repository, platform } = makeIndexPage(); await prepareIndexImport(page, repository, ['photo-a']);
+  page.openAssistant(); platform.recognize = async () => { throw new Error('读取失败'); };
+  await page.dadaAnalyzeCurrent(); assert.equal(page.dadaState, DADA.DadaState.ERROR);
+  assert.equal(page.recognizingImportTaskId, '');
+  const gate = deferred(); platform.recognize = () => gate.promise;
+  const pending = page.dadaAnalyzeCurrent(); page.showSheet = false; page.finishImport();
+  page.mainRoute = 'garmentImport'; await prepareIndexImport(page, repository, ['photo-b']);
+  gate.resolve({ category: '', color: '红色', material: '', confidence: 0.8,
+    colorSource: RECOGNITION.RECOGNITION_SOURCE_PIXEL_COLOR, source: RECOGNITION.RECOGNITION_SOURCE_PIXEL_COLOR });
+  await pending; assert.deepEqual(page.importRecognitionHints, []); assert.equal(page.importItems[0].draft.color, '');
+  assert.equal(page.dadaVisualState(), DADA.DadaState.IDLE);
 });

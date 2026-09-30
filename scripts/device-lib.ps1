@@ -5,11 +5,21 @@
 # code page, so non-ASCII characters corrupt the parse. Chinese labels are built from code
 # points here, and layout dumps are read back with an explicit UTF-8 encoding.
 
-$script:HdcExe = 'D:\Software\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe'
+$script:HdcExe = $env:YIDA_HDC_PATH
+if ([string]::IsNullOrWhiteSpace($script:HdcExe)) {
+    # Allow both workstation layouts; callers can override with YIDA_HDC_PATH.
+    $hdcCandidates = @(
+        'D:\DevEco Studio 2\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe',
+        'D:\Software\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe'
+    )
+    $script:HdcExe = $hdcCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+}
 $script:BundleName = 'com.chr.Yi_Da'
 $script:SnapshotPath = "/data/app/el2/100/base/$($script:BundleName)/haps/entry/files/wardrobe_demo_v1.json"
 
-if (-not (Test-Path $script:HdcExe)) { throw "hdc.exe not found: $($script:HdcExe)" }
+if ([string]::IsNullOrWhiteSpace($script:HdcExe) -or -not (Test-Path -LiteralPath $script:HdcExe)) {
+    throw 'hdc.exe not found. Set YIDA_HDC_PATH to the SDK tool path.'
+}
 
 function Invoke-Hdc {
     param([string[]]$HdcArgs)
