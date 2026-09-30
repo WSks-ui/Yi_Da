@@ -3,7 +3,6 @@
 import { DiaryEntry, Garment, Outfit } from '../model/Wardrobe';
 import { Theme, Type } from '../components/Theme';
 import { MaterialChip, ChipTone } from '../components/MaterialKit';
-import { DadaOrb } from '../components/DadaOrb';
 import { precipitationAdvice, temperatureAdvice } from '../service/TemperatureAdvice';
 import { common } from '@kit.AbilityKit';
 
@@ -40,7 +39,6 @@ export struct HomePage {
   onOpenDiy: () => void = () => {};
   onOpenDiary: () => void = () => {};
   onOpenTryOn: () => void = () => {};
-  onOpenAssistant: () => void = () => {};
   onSaveOutfit: (look: Outfit) => void = () => {};
   onRecordLook: (look: Outfit) => void = () => {};
   onOpenProfile: () => void = () => {};
@@ -190,7 +188,7 @@ export struct HomePage {
             Text('上传衣物').fontSize(Type.buttonSmall).fontColor(Theme.onAccent)
               .maxLines(2).layoutWeight(1).textAlign(TextAlign.Center)
           }.width('100%').padding({ left: 12, right: 12 }).justifyContent(FlexAlign.Center)
-        }.width('100%').height(40 * this.textScale).backgroundColor(Theme.accent).borderRadius(20)
+        }.width('100%').height(40 * this.textScale).backgroundColor(Theme.accent).borderRadius(8)
           .onClick(() => this.onAddGarment())
       }.width('100%').height(this.boardHeight()).padding({ top: 18, left: 14, right: 14, bottom: 14 })
         .alignItems(HorizontalAlign.Start)
@@ -392,19 +390,6 @@ export struct HomePage {
       Column() { this.weatherRow() }.width('100%')
         .opacity(this.entered ? 1 : 0).translate({ y: this.entered ? 0 : 20 })
         .animation({ duration: 300, delay: 0, curve: Curve.FastOutSlowIn })
-      Row({ space: 10 }) {
-        DadaOrb({ diameter: 28, pulseKey: 'today' })
-        Column({ space: 2 }) {
-          Text('搭搭').fontSize(Type.bodySmall).fontWeight(FontWeight.Medium).fontColor(Theme.text)
-          Text('说说场合和温度，先看看穿搭建议').fontSize(Type.caption).fontColor(Theme.secondary)
-        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-        Button('开始', { type: ButtonType.Normal }).height(48).width(68).fontSize(Type.buttonSmall)
-          .borderRadius(Theme.radiusPill).backgroundColor(Theme.accentSoft).fontColor(Theme.accent)
-          .onClick(() => this.onOpenAssistant())
-      }.width('100%').padding({ left: 14, right: 8, top: 8, bottom: 8 })
-        .backgroundColor(Theme.accentSoft).borderRadius(Theme.radiusCard)
-        .opacity(this.entered ? 1 : 0).translate({ y: this.entered ? 0 : 20 })
-        .animation({ duration: 300, delay: 35, curve: Curve.FastOutSlowIn })
       Column() { this.entryBoard() }.width('100%')
         .opacity(this.entered ? 1 : 0).translate({ y: this.entered ? 0 : 20 })
         .animation({ duration: 300, delay: 55, curve: Curve.FastOutSlowIn })

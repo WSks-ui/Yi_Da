@@ -67,8 +67,8 @@ export struct DadaEntry {
         DadaOrb({ diameter: 28, state: this.state, pulseKey: this.pulseKey })
         Text('搭搭').fontSize(Type.buttonSmall).fontColor(Theme.accent).maxLines(1)
       }.padding({ left: 8, right: 12 }).justifyContent(FlexAlign.Center)
-    }.height(48).constraintSize({ minWidth: 88 }).borderRadius(Theme.radiusPill)
+    }.height(48).constraintSize({ minWidth: 88 }).borderRadius(8)
       .backgroundColor(Theme.accentSoft).enabled(this.available).onClick(() => this.onOpen())
-      .accessibilityText('打开搭搭助手').stateStyles({ pressed: { .opacity(Theme.pressedOpacity) } })
+      .accessibilityText('打开搭搭助手').stateStyles({ normal: { .opacity(1) }, pressed: { .opacity(Theme.pressedOpacity) } })
   }
 }

@@ -46,11 +46,11 @@ export class Theme {
   static spaceXl: number = 24;
   static spaceXxl: number = 32;
 
-  // 圆角：卡片 16vp 更贴合柔和的暖色观感，输入框 12vp，胶囊取高度一半
-  static radiusCard: number = 16;
+  // 圆角收敛为小幅圆角；保留原触控高度，不把可点击区域缩成难点的小控件。
+  static radiusCard: number = 12;
   static radiusSheet: number = 20;
-  static radiusPill: number = 24;
-  static radiusInput: number = 12;
+  static radiusPill: number = 8;
+  static radiusInput: number = 8;
   static radiusChip: number = 10;
 
   // HdsNavigation 的标题栏是覆盖式的，正文顶部必须留出净空，否则会被硬边切掉。

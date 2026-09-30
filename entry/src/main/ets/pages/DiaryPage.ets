@@ -524,7 +524,7 @@ export struct DiaryPage {
               .backgroundColor(Theme.surfaceSoft).borderRadius(Theme.radiusInput)
               .onSelect((index: number) => this.formOccasion = OCCASIONS[index])
           }.width('100%')
-          Text('当天温度 ' + this.formTemperature + '℃（自己填写的参考值，不是自动采集的天气）')
+          Text('参考温度 ' + this.formTemperature + '℃')
             .fontSize(Type.caption).fontColor(Theme.secondary).width('100%').maxLines(2)
           Slider({ value: this.formTemperature, min: -10, max: 40, step: 1 }).selectedColor(Theme.accent)
             .onChange((value: number) => this.formTemperature = Math.round(value))
@@ -535,8 +535,6 @@ export struct DiaryPage {
               this.feedbackChip(value)
             }, (value: string) => 'fb_' + value + (this.formFeedback === value ? '_1' : '_0'))
           }.width('100%')
-          Text('照片为可选项：本页不读取相册，保存后照片字段为空；需要上身照时由外层接入相册导入再补上。')
-            .fontSize(Type.caption).fontColor(Theme.secondary).lineHeight(20).width('100%')
           if (this.formError.length > 0) {
             Text(this.formError).fontSize(Type.caption).fontColor(Theme.warning).width('100%')
               .padding(Theme.spaceM).backgroundColor(Theme.warningSoft).borderRadius(Theme.radiusInput)
