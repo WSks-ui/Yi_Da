@@ -6,6 +6,7 @@ const DOMAIN = 0x0000;
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    AppStorage.setOrCreate<boolean>('appForeground', true);
     AppStorage.setOrCreate<number>('cardOpenSequence', 0);
     this.handleCardWant(want);
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
@@ -51,11 +52,14 @@ export default class EntryAbility extends UIAbility {
   }
 
   onForeground(): void {
+    AppStorage.setOrCreate<boolean>('appForeground', true);
     // Ability has brought to foreground
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
   }
 
   onBackground(): void {
+    // 试穿演示与光团订阅此标记，后台立即取消计时；回前台不恢复未完成的演示。
+    AppStorage.setOrCreate<boolean>('appForeground', false);
     // Ability has back to background
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground');
   }

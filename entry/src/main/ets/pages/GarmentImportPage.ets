@@ -15,6 +15,8 @@ import { cutoutSupported } from '../service/GarmentCutout';
 import { GARMENT_CATEGORIES } from '../service/GarmentRecognition';
 import { BUNDLED_GARMENT_PHOTOS, BundledGarmentPhoto } from '../service/BundledGarmentPhotos';
 import { Theme, Type } from '../components/Theme';
+import { DadaEntry } from '../components/DadaOrb';
+import { DadaState } from '../service/DadaContext';
 
 const COLORS: string[] = ['白色', '黑色', '灰色', '蓝色', '绿色', '棕色', '多色'];
 const CONTENT_MAX_WIDTH: number = 840;
@@ -51,6 +53,7 @@ export struct GarmentImportPage {
   onMaxTemp: (index: number, value: number) => void = () => {};
   onOccasions: (index: number, occasions: string[]) => void = () => {};
   onExit: () => void = () => {};
+  onOpenAssistant: () => void = () => {};
 
   // 滑杆的拖动过程需要本地值，否则受控组件会边拖边被回写、手感发滞。
   @State sliderMin: number = 12;
@@ -303,6 +306,8 @@ export struct GarmentImportPage {
           : `一次最多 ${IMPORT_SELECT_LIMIT} 张`)
           .fontSize(Type.caption).fontColor(Theme.secondary).maxLines(1)
       }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+      DadaEntry({ state: this.recognitionBusy ? DadaState.WORKING : DadaState.IDLE,
+        pulseKey: this.current()?.id || 'import', available: !this.busy, onOpen: () => this.onOpenAssistant() })
     }
       .width('100%').height(Theme.navBarHeight).alignItems(VerticalAlign.Center)
       .padding({ left: Theme.spaceS, right: Theme.pagePadding })

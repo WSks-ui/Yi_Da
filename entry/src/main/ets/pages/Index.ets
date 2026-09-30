@@ -41,8 +41,9 @@ import { GarmentImportController } from '../service/GarmentImportController';
 import { CommitCallbacks, SnapshotCommit } from '../service/SnapshotCommit';
 import { GarmentImportPage } from './GarmentImportPage';
 import { bundledPhotoId, bundledPhotoSource, importBundledGarmentPhoto } from '../service/BundledGarmentPhotos';
-import { GarmentRecognition, recognizeGarment, recognitionSummary, RECOGNITION_SOURCE_PIXEL_COLOR }
+import { GarmentRecognition, recognitionSummary, RECOGNITION_SOURCE_PIXEL_COLOR }
   from '../service/GarmentRecognition';
+import { recognizeGarmentPhoto as recognizeGarment } from '../service/GarmentRecognitionImage';
 import { garmentModel } from '../service/OnDeviceGarmentModel';
 import { ClothingCandidate } from '../service/OpenImageClothing';
 import { runOutfitAgent, OutfitAgentContext, OutfitAgentSession } from '../service/OutfitAgent';
@@ -52,6 +53,10 @@ import { commitWardrobeMigrationCandidate, MigrationPreparationResult,
 import { createCoreFileMigrationTargetAdapter, exportWardrobeMigrationWithPicker, MigrationPickerResult,
   selectMigrationPackageWithPicker } from '../service/WardrobeMigrationHost';
 import { findDemoScene, saveDemoTask } from '../service/TryOnDemo';
+import { DadaEntry } from '../components/DadaOrb';
+import { AssistantProposal, DadaAction, DadaContext, DadaPage, DadaState, DADA_WELCOME, TRY_ON_BOUNDARY,
+  dadaGuide, validateAssistantOutfit } from '../service/DadaContext';
+import { TryOnCommand, TryOnStage, presentationRunning } from '../service/TryOnPresentationController';
 
 interface TextPair {
   title: string;
@@ -65,6 +70,7 @@ interface StatValue {
 
 interface ImportRecognitionHint {
   taskId: string;
+  revision: number;
   originalUri: string;
   color: string;
   categoryIndex: number;
@@ -94,6 +100,7 @@ const CONTENT_MAX_WIDTH: number = 840;
 @Component
 struct Index {
   @StorageLink('cardOpenSequence') @Watch('onCardOpen') cardOpenSequence: number = 0;
+  @StorageProp('appForeground') @Watch('onDadaForegroundChanged') foreground: boolean = true;
   @State tab: number = 0;
   @State garments: Garment[] = [];
   @State saved: Outfit[] = [];
@@ -173,6 +180,17 @@ struct Index {
   @State agentMessages: AssistantMessage[] = [];
   @State agentOutfits: Outfit[] = [];
   private agentLatestOutfit: Outfit | undefined = undefined;
+  @State dadaState: DadaState = DadaState.IDLE;
+  @State dadaFeedback: string = '';
+  @State assistantBusy: boolean = false;
+  @State assistantContext: DadaContext = { page: DadaPage.TODAY, key: 'today', objectId: '' };
+  private assistantProposal: AssistantProposal | undefined = undefined;
+  private assistantProposalSequence: number = 0;
+  private pendingDadaAction: DadaAction | undefined = undefined;
+  private pendingDadaInput: string = '';
+  @State tryOnCommand: TryOnCommand = { id: 0, action: 'start', sceneId: 'denim_skirt' };
+  @State tryOnStage: TryOnStage = TryOnStage.IDLE;
+  private tryOnCommandSequence: number = 0;
   // 主路由：tabs 为底部四入口；其余值打开对应的独立页面。
   @State mainRoute: string = 'tabs';
   // 弹层内容的入场开关：openSheet 里置回false，延后一帧置 true，触发内容淡入。
@@ -350,13 +368,53 @@ struct Index {
     setTimeout(() => { this.sheetEntered = true; }, 50);
   }
 
+  private dadaContext(): DadaContext {
+    let page: DadaPage = DadaPage.TODAY;
+    let objectId: string = '';
+    if (this.mainRoute === 'garmentImport') {
+      page = DadaPage.IMPORT;
+      const item: ImportItem | undefined = this.importItems[this.importIndex];
+      objectId = item === undefined ? '' : item.id + ':' + item.revision + ':' + item.originalUri;
+    } else if (this.mainRoute === 'tryOn') { page = DadaPage.TRY_ON; objectId = this.tryOnSceneId; }
+    else if (this.mainRoute === 'outfitStudio') { page = DadaPage.DIY; }
+    else if (this.mainRoute === 'outfitDetail') { page = DadaPage.DETAIL; objectId = this.selectedLook.id; }
+    else if (this.mainRoute === 'diary') { page = DadaPage.DIARY; }
+    else if (this.tab === 1) { page = DadaPage.WARDROBE; }
+    else if (this.tab === 2) { page = DadaPage.OUTFIT; }
+    else if (this.tab === 3) { page = DadaPage.PROFILE; }
+    return { page: page, key: page + ':' + objectId, objectId: objectId };
+  }
+
   private openAssistant(): void {
-    if (this.agentMessages.length === 0) {
+    if (!this.foreground || this.showSheet || this.navigating() || this.importExitDialogOpen || this.importing) { return; }
+    const context: DadaContext = this.dadaContext();
+    if (this.assistantContext.key !== context.key || this.agentMessages.length === 0) {
       this.agentMessages = [{ id: 'agent_welcome', role: AssistantMessageRole.ASSISTANT,
-        text: '你好，我是易搭助手。我会读取你的衣橱、天气、场合和反馈，给出可解释的穿搭方案。' }];
+        text: DADA_WELCOME }];
+      this.agentOutfits = []; this.assistantProposal = undefined; this.agentLatestOutfit = undefined;
+      this.dadaFeedback = ''; this.dadaState = DadaState.IDLE;
     }
-    this.agentOutfits = this.plans.slice(0, 3);
+    this.assistantContext = context;
     this.openSheet('assistant');
+  }
+
+  private dadaVisualState(): DadaState {
+    if (this.mainRoute === 'tryOn' && presentationRunning(this.tryOnStage)) {
+      return this.tryOnStage === TryOnStage.REVEALING ? DadaState.COMPLETE : DadaState.WORKING;
+    }
+    if (this.recognizingImportTaskId.length > 0) { return DadaState.WORKING; }
+    // 切项或退出后，不把旧分析的处理态留在其它页面的顶栏。
+    if (this.assistantContext.key !== this.dadaContext().key || this.dadaState === DadaState.WORKING) {
+      return DadaState.IDLE;
+    }
+    return this.dadaState;
+  }
+
+  private onDadaForegroundChanged(): void {
+    if (this.foreground) { return; }
+    // 面板关闭与后台回调可能交错；后台丢弃尚未启动的请求，回来后必须由用户重新点击。
+    this.pendingDadaAction = undefined; this.pendingDadaInput = '';
+    this.tryOnCommand = { id: 0, action: 'start', sceneId: this.tryOnSceneId };
   }
 
   private addAgentMessage(role: AssistantMessageRole, text: string): void {
@@ -366,32 +424,142 @@ struct Index {
   }
 
   private submitAssistant(input: string): void {
+    if (this.assistantBusy || this.recognizingImportTaskId.length > 0 || input.trim().length === 0) { return; }
+    if (this.assistantContext.key !== this.dadaContext().key) {
+      this.dadaFeedback = '当前页面内容已变化，请关闭后重新打开搭搭。'; return;
+    }
     this.addAgentMessage(AssistantMessageRole.USER, input);
+    const page: DadaPage = this.assistantContext.page;
+    if (page === DadaPage.IMPORT) {
+      if (input.indexOf('分析') >= 0 || input.indexOf('识别') >= 0) { this.dadaAction(DadaAction.ANALYZE, ''); }
+      else if (input.indexOf('颜色') >= 0 && input.indexOf('采用') >= 0) { this.dadaAction(DadaAction.USE_COLOR, ''); }
+      else if (input.indexOf('品类') >= 0 && input.indexOf('采用') >= 0) { this.dadaAction(DadaAction.USE_CATEGORY, ''); }
+      else { this.addAgentMessage(AssistantMessageRole.ASSISTANT, dadaGuide(page) + ' 请先完成或退出录入，再切换到其它页面。'); }
+      return;
+    }
+    if (page === DadaPage.TRY_ON) {
+      if (input.indexOf('对比') >= 0) { this.dadaAction(DadaAction.COMPARE, ''); }
+      else if (input.indexOf('演示') >= 0 || input.indexOf('试穿') >= 0) {
+        const sceneId: string = input.indexOf('红') >= 0 ? 'red_dress' : input.indexOf('蓝') >= 0 ? 'navy_top' : this.tryOnSceneId;
+        this.dadaAction(DadaAction.TRY_ON, sceneId);
+      } else { this.addAgentMessage(AssistantMessageRole.ASSISTANT, dadaGuide(page)); }
+      return;
+    }
+    if (page === DadaPage.DIY || page === DadaPage.DETAIL || page === DadaPage.DIARY || page === DadaPage.PROFILE) {
+      this.addAgentMessage(AssistantMessageRole.ASSISTANT, dadaGuide(page)); return;
+    }
+    if (!/今天|明天|上课|课堂|约会|展示|正式|答辩|汇报|社团|活动|穿|搭配|上装|上衣|换鞋|一双鞋|一套|冷|凉|热|暖|降温|升温|度|℃|帮助|能做什么|怎么用|指令/.test(input)) {
+      this.addAgentMessage(AssistantMessageRole.ASSISTANT, '我现在能帮你按场合、温度推荐，或在上一套建议里替换单品。试试“上课，24度”或“换一件上装”。'); return;
+    }
+    // 连续追问读上一轮提案的条件，不读首页条件；聊天本身不得发布业务状态或写盘。
+    const previous: AssistantProposal | undefined = this.assistantProposal;
     const context: OutfitAgentContext = { garments: this.garments, profile: this.profile, body: this.body,
-      occasion: this.occasion, temperature: this.temperature, lockedIds: this.lockedIds,
+      occasion: previous === undefined ? this.occasion : previous.occasion,
+      temperature: previous === undefined ? this.temperature : previous.temperature, lockedIds: this.lockedIds,
       excludedIds: this.excludedIds };
     const session: OutfitAgentSession = { latestOutfit: this.agentLatestOutfit };
     const result = runOutfitAgent(input, context, session);
-    this.occasion = result.occasion;
-    this.temperature = result.temperature;
-    this.plans = result.recommendation.outfits;
-    this.explanation = result.recommendation.explanation;
+    this.assistantProposalSequence++;
+    this.assistantProposal = { id: this.assistantProposalSequence, contextKey: this.assistantContext.key,
+      occasion: result.occasion, temperature: result.temperature, outfits: result.recommendation.outfits };
     this.agentLatestOutfit = result.latestOutfit;
     this.agentOutfits = result.recommendation.outfits.slice(0, 3);
-    // 没有完整方案时保留用户当前搭配，不能因为助手的一次询问把桌面卡片清空。
-    if (result.recommendation.outfits.length > 0) {
-      this.activeIds = result.recommendation.outfits[0].garmentIds.slice();
-    }
+    this.dadaState = this.agentOutfits.length > 0 ? DadaState.COMPLETE : DadaState.IDLE;
+    this.dadaFeedback = this.agentOutfits.length > 0 ? '建议已准备好，采用前可以继续调整。' : '';
     this.addAgentMessage(AssistantMessageRole.ASSISTANT, result.reply);
-    this.persist();
   }
 
-  private applyAgentOutfit(look: Outfit): void {
-    this.activeIds = look.garmentIds.slice();
-    this.plans = [look].concat(this.plans.filter((item: Outfit) => item.id !== look.id));
-    this.persist();
-    this.showSheet = false;
-    this.toast('已应用这套搭配');
+  private async applyAgentOutfit(look: Outfit): Promise<void> {
+    const proposal: AssistantProposal | undefined = this.assistantProposal;
+    if (this.assistantBusy || this.readBlocked || this.businessBusy() || proposal === undefined) { return; }
+    if (proposal.contextKey !== this.dadaContext().key || !proposal.outfits.some((item: Outfit) => item.id === look.id)) {
+      this.dadaFeedback = '这份建议已经过期，请重新提问。'; this.dadaState = DadaState.ERROR; return;
+    }
+    const request: OutfitRequest = this.request();
+    request.occasion = proposal.occasion; request.temperature = proposal.temperature;
+    const source: Outfit | undefined = proposal.outfits.find((item: Outfit) => item.id === look.id);
+    const checked: Outfit | undefined = source === undefined ? undefined : validateAssistantOutfit(source, this.garments, request);
+    if (checked === undefined) {
+      this.dadaFeedback = '衣物状态或条件已变化，请重新生成建议。'; this.dadaState = DadaState.ERROR; return;
+    }
+    this.invalidateRetry(); this.assistantBusy = true;
+    const base: DemoSnapshot = this.snapshot();
+    const candidate: DemoSnapshot = { version: base.version, garments: base.garments, saved: base.saved,
+      records: base.records, occasion: checked.occasion, temperature: checked.temperature,
+      activeIds: checked.garmentIds.slice(), profile: base.profile, diary: base.diary,
+      tryOnTasks: base.tryOnTasks, membership: base.membership, body: base.body, city: base.city };
+    try {
+      const success: boolean = await this.commit(candidate, () => {
+        this.occasion = checked.occasion; this.temperature = checked.temperature;
+        this.activeIds = checked.garmentIds.slice(); this.regenerate();
+        this.plans = [checked].concat(this.plans.filter((item: Outfit) => item.id !== checked.id));
+      }, () => {
+        this.refreshCard(); this.dadaState = DadaState.COMPLETE; this.dadaFeedback = '已采用这套搭配';
+        if (this.sheet === 'assistant') { this.showSheet = false; }
+        this.toast('已采用这套搭配');
+      }, () => {
+        if (this.assistantProposal?.id === proposal.id && proposal.contextKey === this.dadaContext().key) {
+          this.applyAgentOutfit(look).catch(() => {});
+        }
+      });
+      if (!success) { this.dadaState = DadaState.ERROR; this.dadaFeedback = '搭配尚未保存，可再次点击采用重试。'; }
+    } finally { this.assistantBusy = false; }
+  }
+
+  private dadaAction(action: DadaAction, input: string): void {
+    if (this.assistantBusy || this.navigating() || this.assistantContext.key !== this.dadaContext().key) { return; }
+    const page: DadaPage = this.assistantContext.page;
+    if (action === DadaAction.GUIDE) { this.addAgentMessage(AssistantMessageRole.ASSISTANT, dadaGuide(page)); return; }
+    if (page === DadaPage.IMPORT) {
+      if (action === DadaAction.ANALYZE) { this.dadaAnalyzeCurrent(); }
+      else if (action === DadaAction.USE_COLOR || action === DadaAction.USE_CATEGORY) {
+        const current: ImportItem | undefined = this.importItems[this.importIndex];
+        if (this.readBlocked || current === undefined || isActivePhase(current.phase) ||
+          current.phase === ImportPhase.SAVED || current.phase === ImportPhase.SKIPPED) {
+          this.dadaFeedback = '当前任务不可编辑，请选择一张待录入的照片。'; return;
+        }
+        const hint: ImportRecognitionHint | undefined = this.importRecognitionHint();
+        if (hint === undefined || (action === DadaAction.USE_COLOR ? hint.color.length === 0 : hint.categoryIndex < 0)) {
+          this.dadaFeedback = '还没有可采用的建议，请先分析当前照片。'; return;
+        }
+        if (action === DadaAction.USE_COLOR) { this.useRecognizedColor(this.importIndex); }
+        else { this.useRecognizedCategory(this.importIndex); }
+        this.dadaFeedback = '建议已填入当前草稿，请继续确认并保存。';
+      } else { this.dadaFeedback = '请先完成或退出录入，再切换到其它页面。'; }
+      return;
+    }
+    if (action === DadaAction.RECOMMEND) { this.submitAssistant(input); return; }
+    if (action === DadaAction.TRY_ON || action === DadaAction.COMPARE || action === DadaAction.OPEN_IMPORT) {
+      if (presentationRunning(this.tryOnStage)) { this.dadaFeedback = '演示正在进行，请先等待或取消。'; return; }
+      this.pendingDadaAction = action; this.pendingDadaInput = input;
+      this.showSheet = false; // 请求在半模态真正消失后分派，避免页面启动时被面板遮住。
+    }
+  }
+
+  private async dadaAnalyzeCurrent(): Promise<void> {
+    if (this.recognizingImportTaskId.length > 0) { return; }
+    const key: string = this.assistantContext.key;
+    this.dadaState = DadaState.WORKING; this.dadaFeedback = '正在分析当前照片…';
+    await this.recognizeImportColor(this.importIndex);
+    if (!this.alive || key !== this.dadaContext().key) { return; }
+    const hint: ImportRecognitionHint | undefined = this.importRecognitionHint();
+    this.dadaState = hint !== undefined && (hint.color.length > 0 || hint.categoryIndex >= 0) ? DadaState.COMPLETE : DadaState.ERROR;
+    this.dadaFeedback = hint === undefined ? '当前照片尚未就绪，请等待导入完成。' : hint.message;
+  }
+
+  private onSheetClosed(): void {
+    // 只在添加表单消失时回收它拥有的临时图片；搭搭面板必须保留所有页面草稿。
+    if (this.sheet === 'add') { this.clearDraft(); }
+    const action: DadaAction | undefined = this.pendingDadaAction;
+    const input: string = this.pendingDadaInput;
+    this.pendingDadaAction = undefined; this.pendingDadaInput = '';
+    if (!this.alive || !this.foreground || this.navigating() || action === undefined ||
+      this.assistantContext.key !== this.dadaContext().key) { return; }
+    if (action === DadaAction.OPEN_IMPORT) { this.openAdd(); return; }
+    this.tryOnCommandSequence++;
+    const sceneId: string = findDemoScene(input) !== undefined ? input : this.tryOnSceneId;
+    this.openTryOn(sceneId);
+    this.tryOnCommand = { id: this.tryOnCommandSequence, action: action === DadaAction.COMPARE ? 'compare' : 'start', sceneId: sceneId };
   }
 
   private restore(snapshot: DemoSnapshot): void {
@@ -420,7 +588,13 @@ struct Index {
     this.plans = result.outfits; this.explanation = result.explanation;
     const selectedIndex: number = this.plans.findIndex((look: Outfit) => look.garmentIds.join(',') === this.activeIds.join(','));
     if (selectedIndex < 0) {
-      this.activeIds = this.plans.length > 0 ? this.plans[0].garmentIds.slice() : [];
+      // 多轮替换后的合法组合未必位列前三。重新计算和重启时重新校验该组合，
+      // 合法则保留用户已采用的选择，避免磁盘、首页与桌面卡片显示不同的搭配。
+      const selected: Outfit = { id: '', garmentIds: this.activeIds.slice(), occasion: this.occasion,
+        temperature: this.temperature, reason: '', name: '', isCustom: false, savedAt: '' };
+      const checked: Outfit | undefined = validateAssistantOutfit(selected, this.garments, this.request());
+      if (checked !== undefined) { this.plans = [checked].concat(this.plans); }
+      else { this.activeIds = this.plans.length > 0 ? this.plans[0].garmentIds.slice() : []; }
     } else if (selectedIndex > 0) {
       // 重启及卡片直达时优先显示已选组合，使首页与桌面卡片保持一致。
       this.plans = [this.plans[selectedIndex]].concat(this.plans.filter((look: Outfit, index: number) => index !== selectedIndex));
@@ -1077,7 +1251,7 @@ struct Index {
     const item: ImportItem | undefined = this.importItems[this.importIndex];
     if (item === undefined) { return undefined; }
     return this.importRecognitionHints.find((hint: ImportRecognitionHint) =>
-      hint.taskId === item.id && hint.originalUri === item.originalUri);
+      hint.taskId === item.id && hint.revision === item.revision && hint.originalUri === item.originalUri);
   }
 
   // 只对已复制到本机的原图分析像素并运行端侧模型。异步结束后按会话、taskId 和图片 URI 核对，
@@ -1090,6 +1264,7 @@ struct Index {
     const session: ImportSession = this.importSessionRef();
     const taskId: string = item.id;
     const originalUri: string = item.originalUri;
+    const revision: number = item.revision;
     this.recognizingImportTaskId = taskId;
     try {
       const result: GarmentRecognition = await recognizeGarment(originalUri);
@@ -1099,7 +1274,7 @@ struct Index {
       const current: ImportItem | undefined = session.find(taskId);
       if (!this.alive || this.mainRoute !== 'garmentImport' || this.importCtl === undefined ||
         this.importCtl.currentSession() !== session || current === undefined ||
-        current.originalUri !== originalUri || current.phase === ImportPhase.SAVED ||
+        current.originalUri !== originalUri || current.revision !== revision || current.phase === ImportPhase.SAVED ||
         current.phase === ImportPhase.SKIPPED) { return; }
       const usable: boolean = result.colorSource === RECOGNITION_SOURCE_PIXEL_COLOR && result.color.length > 0;
       // 模型是通用多标签分类器，只给少数可映射到衣橱的品类候选；用户自行确认。
@@ -1112,17 +1287,18 @@ struct Index {
         // 模型候选，应直接展示候选，避免用户同时看到互相矛盾的两句话。
         message = message.indexOf('暂无可用建议') >= 0 ? candidateMessage : `${message} ${candidateMessage}`;
       }
-      const hint: ImportRecognitionHint = { taskId: taskId, originalUri: originalUri,
+      const hint: ImportRecognitionHint = { taskId: taskId, revision: revision, originalUri: originalUri,
         color: usable ? result.color : '', categoryIndex: categoryIndex,
         subcategory: candidate === undefined ? '' : candidate.subcategory, message: message };
       this.importRecognitionHints = this.importRecognitionHints.filter((entry: ImportRecognitionHint) =>
         entry.taskId !== taskId).concat([hint]);
     } catch (error) {
       const current: ImportItem | undefined = session.find(taskId);
-      if (this.alive && this.mainRoute === 'garmentImport' && current !== undefined &&
-        current.originalUri === originalUri) {
+      if (this.alive && this.mainRoute === 'garmentImport' && this.importCtl?.currentSession() === session && current !== undefined &&
+        current.originalUri === originalUri && current.revision === revision &&
+        current.phase !== ImportPhase.SAVED && current.phase !== ImportPhase.SKIPPED) {
           this.importRecognitionHints = this.importRecognitionHints.filter((entry: ImportRecognitionHint) =>
-            entry.taskId !== taskId).concat([{ taskId: taskId, originalUri: originalUri,
+            entry.taskId !== taskId).concat([{ taskId: taskId, revision: revision, originalUri: originalUri,
               color: '', categoryIndex: -1, subcategory: '', message: '图片分析未完成，请手动填写' }]);
       }
     } finally {
@@ -1135,7 +1311,7 @@ struct Index {
     if (item === undefined || isActivePhase(item.phase) || item.phase === ImportPhase.SAVED ||
       item.phase === ImportPhase.SKIPPED) { return; }
     const hint: ImportRecognitionHint | undefined = this.importRecognitionHints.find((entry: ImportRecognitionHint) =>
-      entry.taskId === item.id && entry.originalUri === item.originalUri);
+      entry.taskId === item.id && entry.revision === item.revision && entry.originalUri === item.originalUri);
     if (hint === undefined || hint.color.length === 0) { return; }
     this.importColor(index, hint.color);
   }
@@ -1145,7 +1321,7 @@ struct Index {
     if (item === undefined || isActivePhase(item.phase) || item.phase === ImportPhase.SAVED ||
       item.phase === ImportPhase.SKIPPED) { return; }
     const hint: ImportRecognitionHint | undefined = this.importRecognitionHints.find((entry: ImportRecognitionHint) =>
-      entry.taskId === item.id && entry.originalUri === item.originalUri);
+      entry.taskId === item.id && entry.revision === item.revision && entry.originalUri === item.originalUri);
     if (hint === undefined || hint.categoryIndex < 0 || hint.subcategory.length === 0) { return; }
     this.importCategory(index, hint.categoryIndex);
     this.importSubcategory(index, hint.subcategory);
@@ -1398,6 +1574,9 @@ struct Index {
   }
 
   private closeRoute(): void {
+    if (this.mainRoute === 'tryOn') {
+      this.tryOnCommand = { id: 0, action: 'start', sceneId: this.tryOnSceneId };
+    }
     animateTo({ duration: 240, curve: Curve.FastOutSlowIn }, () => {
       this.mainRoute = this.routeHistory.pop() || 'tabs';
     });
@@ -2152,6 +2331,7 @@ struct Index {
           recognitionColor: this.importRecognitionHint()?.color || '',
           recognitionCategory: this.importRecognitionHint()?.subcategory || '',
           recognitionBusy: this.recognizingImportTaskId.length > 0,
+          onOpenAssistant: () => { this.openAssistant(); },
           onRecognize: (index: number) => { this.recognizeImportColor(index); },
           onUseRecognition: (index: number) => { this.useRecognizedColor(index); },
           onUseCategory: (index: number) => { this.useRecognizedCategory(index); },
@@ -2179,8 +2359,16 @@ struct Index {
           this.iconButton($r('sys.symbol.arrow_left'), '返回', () => this.closeRoute())
           Text(this.routeTitle()).fontSize(Type.section).fontWeight(FontWeight.Medium)
             .fontColor(Theme.text).layoutWeight(1).maxLines(1)
+          DadaEntry({ state: this.dadaVisualState(),
+            pulseKey: this.dadaContext().key, onOpen: () => this.openAssistant() })
         }.width('100%').height(Theme.navBarHeight)
           .padding({ left: Theme.spaceS, right: Theme.pagePadding })
+        if (this.mainRoute === 'tryOn') {
+          // 能力边界置于滚动区外，素材选择、过程、结果和记录滚动时都持续可见。
+          Text(TRY_ON_BOUNDARY).fontSize(Type.caption).fontColor(Theme.accent).width('100%')
+            .padding({ left: Theme.pagePadding, right: Theme.pagePadding, top: 8, bottom: 8 })
+            .backgroundColor(Theme.accentSoft)
+        }
         Scroll(this.routeScroller) {
           Column() {
             if (this.mainRoute === 'outfitStudio') {
@@ -2224,6 +2412,12 @@ struct Index {
               TryOnPage({
                 tasks: this.tryOnTasks,
                 initialSceneId: this.tryOnSceneId,
+                command: this.tryOnCommand,
+                onCommandConsumed: (id: number) => {
+                  if (this.tryOnCommand.id === id) { this.tryOnCommand = { id: 0, action: 'start', sceneId: this.tryOnSceneId }; }
+                },
+                onSceneChange: (id: string) => { this.tryOnSceneId = id; },
+                onStageChange: (stage: TryOnStage) => { this.tryOnStage = stage; },
                 onSubmit: (sceneId: string) => this.submitTryOn(sceneId),
                 onDeleteTask: (id: string) => this.deleteTryOnTask(id),
                 onReveal: () => { this.routeScroller.scrollTo({ xOffset: 0, yOffset: 0 }); }
@@ -2600,9 +2794,18 @@ struct Index {
         else if (this.sheet === 'assistant') { AssistantSheet({
           messages: this.agentMessages,
           outfits: this.agentOutfits,
+          garments: this.garments,
+          context: this.assistantContext,
+          state: this.recognizingImportTaskId.length > 0 ? DadaState.WORKING : this.dadaState,
+          feedback: this.dadaFeedback,
+          busy: this.assistantBusy || this.recognizingImportTaskId.length > 0 || presentationRunning(this.tryOnStage),
+          recognitionMessage: this.importRecognitionHint()?.message || '',
+          recognitionColor: this.importRecognitionHint()?.color || '',
+          recognitionCategory: this.importRecognitionHint()?.subcategory || '',
           onSubmit: (input: string) => { this.submitAssistant(input); },
           onQuick: (input: string) => { this.submitAssistant(input); },
-          onApply: (look: Outfit) => { this.applyAgentOutfit(look); }
+          onApply: (look: Outfit) => { this.applyAgentOutfit(look).catch(() => {}); },
+          onAction: (action: DadaAction, input: string) => { this.dadaAction(action, input); }
         }) }
         else if (this.sheet === 'city') {
           CityPickerSheet({ currentCity: this.city, currentTemperature: this.temperature,
@@ -2644,10 +2847,12 @@ struct Index {
 
       Blank()
 
+      DadaEntry({ state: this.dadaVisualState(), pulseKey: this.dadaContext().key,
+        onOpen: () => this.openAssistant() })
       Row() {
         SymbolGlyph($r('sys.symbol.plus')).fontSize(Theme.iconMd).fontColor([Theme.accent])
       }
-        .width(Theme.buttonCompact).height(Theme.buttonCompact)
+        .width(48).height(48).margin({ left: 8 })
         .justifyContent(FlexAlign.Center)
         .backgroundColor(Color.Transparent)
         .border({ width: 1, color: Theme.line })
@@ -2751,7 +2956,7 @@ struct Index {
       // 试穿与偏好测验内容较长用大尺寸；其余弹层内容较短，用中尺寸避免大片空白。
       .bindSheet($$this.showSheet, this.sheetContent,
         { height: this.sheet === 'detail' ? SheetSize.MEDIUM : SheetSize.LARGE,
-          showClose: true, systemMaterial: sheetMaterial(), onDisappear: () => this.clearDraft() })
+          showClose: true, systemMaterial: sheetMaterial(), onDisappear: () => this.onSheetClosed() })
   }
 
   // 底部悬浮页签 + 页面内容把

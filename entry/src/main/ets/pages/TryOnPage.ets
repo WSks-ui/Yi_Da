@@ -2,20 +2,29 @@ import { common } from '@kit.AbilityKit';
 import { TryOnTask } from '../model/Wardrobe';
 import { Theme, Type } from '../components/Theme';
 import { DEMO_POSES, DEMO_SCENES, TryOnDemoPose, TryOnDemoPoseId, TryOnDemoScene,
-  findDemoScene, formatTryOnDate, simulateTryOnDemo } from '../service/TryOnDemo';
+  findDemoScene, formatTryOnDate } from '../service/TryOnDemo';
 import { demoImages, demoPoseResult, exportDemoResult } from '../service/TryOnDemoMedia';
 import { saveOutfitToAlbum, shareOutfitImage } from '../service/OutfitExport';
+import { DadaOrb } from '../components/DadaOrb';
+import { DadaState } from '../service/DadaContext';
+import { TryOnCommand, TryOnPresentation, TryOnPresentationController, TryOnStage,
+  presentationRunning, presentationText } from '../service/TryOnPresentationController';
 
-// 离线演示从三组配套样片中选择，并用短暂等待模拟提交过程；结果始终来自打包的固定图片。
+// 离线演示从三组配套样片中选择，六秒过程由唯一控制器发布；结果始终来自打包的固定图片。
 // 侧面和背面资源未就绪时保持禁用，未来接真实服务时不可把这些样片伪装成用户照片结果。
 // 本页沿用 Index 的外层 Scroll，异步写入交给父组件统一提交。
 @Component
 export struct TryOnPage {
   @Prop tasks: TryOnTask[] = [];
   @Prop initialSceneId: string = 'denim_skirt';
+  @Prop @Watch('consumeCommand') command: TryOnCommand = { id: 0, action: 'start', sceneId: 'denim_skirt' };
+  @StorageProp('appForeground') @Watch('onForegroundChanged') foreground: boolean = true;
   onSubmit: (sceneId: string) => Promise<void> = () => Promise.reject(new Error('保存暂不可用'));
   onDeleteTask: (id: string) => Promise<void> = () => Promise.reject(new Error('删除暂不可用'));
   onReveal: () => void = () => {};
+  onCommandConsumed: (id: number) => void = () => {};
+  onSceneChange: (id: string) => void = () => {};
+  onStageChange: (stage: TryOnStage) => void = () => {};
 
   @State selectedId: string = 'denim_skirt';
   @State selectedPose: TryOnDemoPoseId = 'front';
@@ -25,8 +34,11 @@ export struct TryOnPage {
   @State generating: boolean = false;
   @State notice: string = '';
   @State failed: boolean = false;
+  @State presentation: TryOnPresentation = { stage: TryOnStage.IDLE, sceneId: '', runId: 0 };
   private alive: boolean = false;
-  private generationRevision: number = 0;
+  private controller: TryOnPresentationController | undefined = undefined;
+  private unsubscribe: (() => void) | undefined = undefined;
+  private consumedCommandId: number = 0;
 
   aboutToAppear(): void {
     this.alive = true;
@@ -34,11 +46,40 @@ export struct TryOnPage {
     this.selectedId = findDemoScene(this.initialSceneId) ? this.initialSceneId : 'denim_skirt';
     this.generatedSceneId = this.hasSavedScene(this.selectedId) ? this.selectedId : '';
     this.selectedPose = 'front';
+    this.controller = new TryOnPresentationController();
+    this.unsubscribe = this.controller.subscribe((state: TryOnPresentation) => {
+      if (!this.alive) { return; }
+      const wasGenerating: boolean = this.generating;
+      this.presentation = state;
+      this.generating = presentationRunning(state.stage);
+      if (wasGenerating || this.generating) { this.busy = this.generating; }
+      if (state.stage === TryOnStage.REVEALING || state.stage === TryOnStage.COMPLETE) {
+        this.generatedSceneId = state.sceneId; this.mode = '示例效果';
+      }
+      this.onStageChange(state.stage);
+    });
+    this.consumeCommand();
   }
   aboutToDisappear(): void {
     this.alive = false;
-    this.generationRevision++;
+    if (this.unsubscribe !== undefined) { this.unsubscribe(); this.unsubscribe = undefined; }
+    this.controller?.dispose(); this.controller = undefined;
+    this.onStageChange(TryOnStage.IDLE);
     if (this.generating) { this.busy = false; this.generating = false; }
+  }
+
+  onForegroundChanged(): void { if (!this.foreground && this.generating) { this.cancelPresentation(); } }
+
+  // 挂载和 @Watch 都可能收到同一条请求。先记录并通知父层消费，再启动，避免订阅发布引发重复播放。
+  consumeCommand(): void {
+    if (!this.alive || this.command.id <= 0 || this.command.id <= this.consumedCommandId) { return; }
+    const request: TryOnCommand = this.command;
+    this.consumedCommandId = request.id; this.onCommandConsumed(request.id);
+    if (this.busy || !this.foreground) { return; }
+    if (!findDemoScene(request.sceneId)) { this.notice = '这组试穿样片暂不可用。'; return; }
+    if (request.action === 'start') { this.select(request.sceneId); this.generatePreview(); }
+    else if (this.isGenerated()) { this.mode = '对比'; this.onReveal(); }
+    else { this.notice = '先完成一次样片演示，再查看原图对比。'; this.onReveal(); }
   }
 
   private current(): TryOnDemoScene {
@@ -85,35 +126,24 @@ export struct TryOnPage {
     this.mode = '示例效果';
     this.notice = '';
     this.failed = false;
+    this.onSceneChange(id);
   }
 
-  private async generatePreview(): Promise<void> {
-    if (this.busy) { return; }
-    const sceneId: string = this.selectedId;
-    const revision: number = ++this.generationRevision;
-    this.busy = true;
-    this.generating = true;
+  private generatePreview(): void {
+    if (this.busy || !this.foreground || this.controller === undefined) { return; }
     this.generatedSceneId = '';
-    this.notice = '正在打开示例效果…';
+    this.notice = '';
     this.failed = false;
     try {
-      const result = await simulateTryOnDemo(sceneId);
-      if (!this.alive || revision !== this.generationRevision) { return; }
-      this.generatedSceneId = result.sceneId;
-      this.selectedPose = result.poseId;
-      this.mode = '示例效果';
-      this.notice = '已显示示例效果';
+      this.controller.start(this.selectedId);
+      this.onReveal();
     } catch (error) {
-      if (this.alive && revision === this.generationRevision) {
-        this.notice = (error as Error).message || '演示样片暂不可用';
-        this.failed = true;
-      }
-    } finally {
-      if (this.alive && revision === this.generationRevision) {
-        this.busy = false;
-        this.generating = false;
-      }
+      this.notice = (error as Error).message || '演示样片暂不可用'; this.failed = true;
     }
+  }
+
+  private cancelPresentation(): void {
+    this.controller?.cancel(); this.generatedSceneId = ''; this.notice = '已取消演示，可重新开始。';
   }
 
   private async saveRecord(): Promise<void> {
@@ -187,7 +217,8 @@ export struct TryOnPage {
 
   @Styles
   pressable() {
-    .stateStyles({ pressed: { .opacity(Theme.pressedOpacity) }, disabled: { .opacity(Theme.disabledOpacity) } })
+    .stateStyles({ normal: { .opacity(1) }, pressed: { .opacity(Theme.pressedOpacity) },
+      disabled: { .opacity(Theme.disabledOpacity) } })
   }
 
   @Builder
@@ -246,12 +277,13 @@ export struct TryOnPage {
     Button({ type: ButtonType.Normal }) {
       Row({ space: 8 }) {
         SymbolGlyph($r('sys.symbol.arrow_right')).fontSize(20).fontColor([Theme.onAccent])
-        Text(this.generating ? '正在打开…' :
-          (this.isGenerated() ? '再次查看示例效果' : '查看示例效果'))
+        Text(this.generating ? '取消演示' :
+          (this.isGenerated() ? '重播演示' : '让搭搭演示试穿'))
           .fontSize(Type.button).fontColor(Theme.onAccent)
       }.justifyContent(FlexAlign.Center).width('100%')
     }.width('100%').height(48).borderRadius(8).backgroundColor(Theme.accent)
-      .enabled(!this.busy).pressable().onClick(() => this.generatePreview())
+      .enabled(!this.busy || this.generating).pressable()
+      .onClick(() => { if (this.generating) { this.cancelPresentation(); } else { this.generatePreview(); } })
   }
 
   @Builder
@@ -297,11 +329,65 @@ export struct TryOnPage {
   }
 
   @Builder
-  private tool(icon: Resource, label: string, action: () => void, enabled: boolean = true) {
+  private presentationCard() {
+    Column({ space: 14 }) {
+      Row({ space: 12 }) {
+        DadaOrb({ diameter: 80, state: this.presentation.stage === TryOnStage.REVEALING ? DadaState.COMPLETE : DadaState.WORKING,
+          pulseKey: String(this.presentation.runId) })
+        Column({ space: 6 }) {
+          Text('搭搭陪你试穿').fontSize(Type.cardTitle).fontWeight(FontWeight.Medium).fontColor(Theme.text)
+          Text(presentationText(this.presentation.stage)).fontSize(Type.bodySmall).fontColor(Theme.secondary).lineHeight(22)
+        }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+      }.width('100%')
+      Stack() {
+        Row({ space: 10 }) {
+          Image(demoImages(this.selectedId).person).layoutWeight(1).height(210).objectFit(ImageFit.Contain)
+            .translate({ x: this.presentation.stage === TryOnStage.PREPARING ? 0 : 8 })
+            .animation({ duration: 1600, curve: Curve.EaseInOut })
+          Image(demoImages(this.selectedId).garment).layoutWeight(1).height(210).objectFit(ImageFit.Contain)
+            .translate({ x: this.presentation.stage === TryOnStage.PREPARING ? 0 : -8 })
+            .animation({ duration: 1600, curve: Curve.EaseInOut })
+        }.width('100%').opacity(this.presentation.stage === TryOnStage.REVEALING ? 0 :
+          this.presentation.stage === TryOnStage.PRESENTING ? 0.35 : 1)
+          .animation({ duration: 600, curve: Curve.EaseInOut })
+        Image(demoImages(this.selectedId).result).width('100%').height(210).objectFit(ImageFit.Contain)
+          .opacity(this.presentation.stage === TryOnStage.REVEALING ? 1 : 0)
+          .scale({ x: this.presentation.stage === TryOnStage.REVEALING ? 1 : 0.96,
+            y: this.presentation.stage === TryOnStage.REVEALING ? 1 : 0.96 })
+          .animation({ duration: 600, curve: Curve.EaseInOut })
+        Row().width('100%').height(40).linearGradient({ angle: 0,
+          colors: [[Color.Transparent, 0], [Theme.accentSoft, 0.5], [Color.Transparent, 1]] })
+          .opacity(this.presentation.stage === TryOnStage.INTERACTING ? 0.7 : 0)
+          .translate({ y: this.presentation.stage === TryOnStage.PREPARING ? -80 : 80 })
+          .animation({ duration: 1700, curve: Curve.EaseInOut }).hitTestBehavior(HitTestMode.None)
+      }.width('100%').height(210).backgroundColor(Theme.surfaceSoft).borderRadius(12).clip(true)
+      Row({ space: 8 }) {
+        ForEach(['准备素材', '演示交互', '呈现样片', '结果揭晓'], (label: string, index: number) => {
+          Column({ space: 6 }) {
+            Row().width('100%').height(4).borderRadius(2)
+              .backgroundColor(this.stepIndex() >= index ? Theme.accent : Theme.line)
+            Text(label).fontSize(Type.caption).fontColor(this.stepIndex() === index ? Theme.accent : Theme.secondary)
+          }.layoutWeight(1)
+        }, (label: string) => label)
+      }.width('100%')
+    }.width('100%').padding(16).backgroundColor(Theme.surface).borderRadius(Theme.radiusCard)
+      .border({ width: 1, color: Theme.line })
+  }
+
+  private stepIndex(): number {
+    if (this.presentation.stage === TryOnStage.PREPARING) { return 0; }
+    if (this.presentation.stage === TryOnStage.INTERACTING) { return 1; }
+    if (this.presentation.stage === TryOnStage.REVEALING || this.presentation.stage === TryOnStage.COMPLETE) { return 3; }
+    return 2;
+  }
+
+  @Builder
+  private tool(icon: Resource, label: string, action: () => void, requiresResult: boolean = false) {
     Button({ type: ButtonType.Normal }) {
       SymbolGlyph(icon).fontSize(22).fontColor([Theme.accent])
     }.width(48).height(48).borderRadius(8).backgroundColor(Theme.accentSoft)
-      .accessibilityText(label).enabled(!this.busy && enabled).pressable().onClick(action)
+      // Builder 不接收生成状态的布尔快照；直接读取页面状态，保证过程结束后导出入口立即可用。
+      .accessibilityText(label).enabled(!this.busy && (!requiresResult || this.isGenerated())).pressable().onClick(action)
       .onHover((hover: boolean) => {
         if (hover) { this.getUIContext().getPromptAction().showToast({ message: label }); }
       })
@@ -320,8 +406,8 @@ export struct TryOnPage {
       }.layoutWeight(1).height(48).borderRadius(8).backgroundColor(Theme.accent)
         .enabled(!this.busy && this.isGenerated() && !this.saved())
         .pressable().onClick(() => this.saveRecord())
-      this.tool($r('sys.symbol.arrow_down_circle'), '保存样片到相册', () => this.deliver(true), this.isGenerated())
-      this.tool($r('sys.symbol.share'), '分享试穿样片', () => this.deliver(false), this.isGenerated())
+      this.tool($r('sys.symbol.arrow_down_circle'), '保存样片到相册', () => this.deliver(true), true)
+      this.tool($r('sys.symbol.share'), '分享试穿样片', () => this.deliver(false), true)
     }.width('100%')
   }
 
@@ -360,17 +446,21 @@ export struct TryOnPage {
           this.sceneTile(scene)
         }, (scene: TryOnDemoScene) => scene.id + (this.selectedId === scene.id ? '_active' : '_idle'))
       }.width('100%')
-      Row({ space: 12 }) {
-        Image(demoImages(this.selectedId).person).width(44).height(64).objectFit(ImageFit.Contain)
-          .backgroundColor(Theme.surfaceSoft).borderRadius(4).accessibilityText('配套人像')
-        Image(demoImages(this.selectedId).garment).width(44).height(64).objectFit(ImageFit.Contain)
-          .backgroundColor(Theme.surfaceSoft).borderRadius(4).accessibilityText('配套服装参考图')
-        Column({ space: 4 }) {
-          Text(this.current().name).fontSize(Type.cardTitle).fontColor(Theme.text).fontWeight(FontWeight.Medium)
-          Text('配套人像 / ' + this.current().garmentLabel).fontSize(Type.caption).fontColor(Theme.secondary).maxLines(2)
-        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-      }.width('100%')
-      if (this.isGenerated()) {
+      if (!this.generating) {
+        Row({ space: 12 }) {
+          Image(demoImages(this.selectedId).person).width(44).height(64).objectFit(ImageFit.Contain)
+            .backgroundColor(Theme.surfaceSoft).borderRadius(4).accessibilityText('配套人像')
+          Image(demoImages(this.selectedId).garment).width(44).height(64).objectFit(ImageFit.Contain)
+            .backgroundColor(Theme.surfaceSoft).borderRadius(4).accessibilityText('配套服装参考图')
+          Column({ space: 4 }) {
+            Text(this.current().name).fontSize(Type.cardTitle).fontColor(Theme.text).fontWeight(FontWeight.Medium)
+            Text('配套人像 / ' + this.current().garmentLabel).fontSize(Type.caption).fontColor(Theme.secondary).maxLines(2)
+          }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        }.width('100%')
+      }
+      if (this.generating) {
+        this.presentationCard()
+      } else if (this.isGenerated()) {
         this.poseControl()
         this.modeControl()
         this.preview()

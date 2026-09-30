@@ -3,6 +3,7 @@
 import { DiaryEntry, Garment, Outfit } from '../model/Wardrobe';
 import { Theme, Type } from '../components/Theme';
 import { MaterialChip, ChipTone } from '../components/MaterialKit';
+import { DadaOrb } from '../components/DadaOrb';
 import { precipitationAdvice, temperatureAdvice } from '../service/TemperatureAdvice';
 import { common } from '@kit.AbilityKit';
 
@@ -392,12 +393,12 @@ export struct HomePage {
         .opacity(this.entered ? 1 : 0).translate({ y: this.entered ? 0 : 20 })
         .animation({ duration: 300, delay: 0, curve: Curve.FastOutSlowIn })
       Row({ space: 10 }) {
-        SymbolGlyph($r('sys.symbol.person')).fontSize(22).fontColor([Theme.accent])
+        DadaOrb({ diameter: 28, pulseKey: 'today' })
         Column({ space: 2 }) {
-          Text('易搭助手').fontSize(Type.bodySmall).fontWeight(FontWeight.Medium).fontColor(Theme.text)
-          Text('说说场合和温度，马上生成方案').fontSize(Type.caption).fontColor(Theme.secondary)
+          Text('搭搭').fontSize(Type.bodySmall).fontWeight(FontWeight.Medium).fontColor(Theme.text)
+          Text('说说场合和温度，先看看穿搭建议').fontSize(Type.caption).fontColor(Theme.secondary)
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-        Button('开始', { type: ButtonType.Normal }).height(34).width(68).fontSize(Type.buttonSmall)
+        Button('开始', { type: ButtonType.Normal }).height(48).width(68).fontSize(Type.buttonSmall)
           .borderRadius(Theme.radiusPill).backgroundColor(Theme.accentSoft).fontColor(Theme.accent)
           .onClick(() => this.onOpenAssistant())
       }.width('100%').padding({ left: 14, right: 8, top: 8, bottom: 8 })

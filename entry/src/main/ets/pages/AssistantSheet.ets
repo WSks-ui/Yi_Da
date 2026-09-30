@@ -1,6 +1,8 @@
-import { Outfit } from '../model/Wardrobe';
+import { Garment, Outfit, garmentImage } from '../model/Wardrobe';
 import { Theme, Type } from '../components/Theme';
 import { MaterialPanel } from '../components/MaterialKit';
+import { DadaOrb } from '../components/DadaOrb';
+import { DadaAction, DadaContext, DadaPage, DadaShortcut, DadaState, TRY_ON_BOUNDARY, dadaGuide, dadaShortcuts } from '../service/DadaContext';
 
 export enum AssistantMessageRole {
   USER = 'user',
@@ -17,11 +19,24 @@ export interface AssistantMessage {
 export struct AssistantSheet {
   @Prop messages: AssistantMessage[] = [];
   @Prop outfits: Outfit[] = [];
+  @Prop garments: Garment[] = [];
+  @Prop context: DadaContext = { page: DadaPage.TODAY, key: 'today', objectId: '' };
+  @Prop state: DadaState = DadaState.IDLE;
+  @Prop feedback: string = '';
+  @Prop recognitionMessage: string = '';
+  @Prop recognitionColor: string = '';
+  @Prop recognitionCategory: string = '';
   @Prop busy: boolean = false;
   @State draft: string = '';
   onSubmit: (input: string) => void = () => {};
   onApply: (outfit: Outfit) => void = () => {};
   onQuick: (input: string) => void = () => {};
+  onAction: (action: DadaAction, input: string) => void = () => {};
+
+  private imageOf(id: string): ResourceStr {
+    const item: Garment | undefined = this.garments.find((entry: Garment) => entry.id === id);
+    return item === undefined ? $r('app.media.demo_shirt') : garmentImage(item);
+  }
 
   private send(): void {
     const input: string = this.draft.trim();
@@ -35,7 +50,7 @@ export struct AssistantSheet {
     Row() {
       if (message.role === AssistantMessageRole.ASSISTANT) { Blank().layoutWeight(0.12) }
       Column({ space: Theme.spaceXs }) {
-        Text(message.role === AssistantMessageRole.USER ? '你' : '易搭助手')
+        Text(message.role === AssistantMessageRole.USER ? '你' : '搭搭')
           .fontSize(Type.caption).fontColor(message.role === AssistantMessageRole.USER ? Theme.accent : Theme.secondary)
         Text(message.text).fontSize(Type.bodySmall).fontColor(Theme.text).lineHeight(22).width('100%')
       }.padding(Theme.spaceM).backgroundColor(message.role === AssistantMessageRole.USER
@@ -54,9 +69,18 @@ export struct AssistantSheet {
             .fontWeight(FontWeight.Medium).fontColor(Theme.text).layoutWeight(1)
           Text(`${outfit.garmentIds.length} 件`).fontSize(Type.caption).fontColor(Theme.secondary)
         }.width('100%')
+        Row({ space: 8 }) {
+          ForEach(outfit.garmentIds, (id: string) => {
+            Image(this.imageOf(id))
+              .height(76).layoutWeight(1).objectFit(ImageFit.Contain).borderRadius(8)
+              .backgroundColor(Theme.surfaceSoft)
+          }, (id: string) => id)
+        }.width('100%')
         Text(outfit.reason).fontSize(Type.caption).fontColor(Theme.secondary).lineHeight(20)
           .maxLines(4).width('100%')
-        Button('采用这套', { type: ButtonType.Normal }).width('100%').height(Theme.buttonCompact)
+        Text('采用后更新为 ' + outfit.occasion + ' · ' + outfit.temperature + '℃')
+          .fontSize(Type.caption).fontColor(Theme.secondary).width('100%')
+        Button('采用这套', { type: ButtonType.Normal }).width('100%').height(Theme.buttonHeight)
           .borderRadius(Theme.radiusPill).backgroundColor(Theme.accent).fontColor(Theme.onAccent)
           .enabled(!this.busy).onClick(() => this.onApply(outfit))
       }.width('100%')
@@ -66,23 +90,37 @@ export struct AssistantSheet {
   build() {
     Column({ space: Theme.spaceM }) {
       Row() {
+        DadaOrb({ diameter: 40, state: this.state, pulseKey: this.context.key })
         Column({ space: Theme.spaceXs }) {
-          Text('易搭助手').fontSize(Type.title).fontWeight(FontWeight.Bold).fontColor(Theme.text)
-          Text('离线运行，调用你的衣橱和推荐规则').fontSize(Type.caption).fontColor(Theme.secondary)
-        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-        Text('可解释').fontSize(Type.caption).fontColor(Theme.accent)
+          Text('搭搭').fontSize(Type.title).fontWeight(FontWeight.Bold).fontColor(Theme.text)
+          Text('用已有衣物，发现新的搭配').fontSize(Type.caption).fontColor(Theme.secondary)
+        }.margin({ left: 12 }).alignItems(HorizontalAlign.Start).layoutWeight(1)
       }.width('100%')
-
-      if (this.messages.length <= 1) {
-        Text('你可以直接说“明天上课怎么穿”“约会，22度”或“换一件上装”。')
-          .fontSize(Type.bodySmall).fontColor(Theme.secondary).lineHeight(22).width('100%')
-        Flex({ wrap: FlexWrap.Wrap }) {
-          ForEach(['明天上课怎么穿', '约会，22度', '换一件上装', '帮助'], (prompt: string) => {
-            Button(prompt, { type: ButtonType.Normal }).fontSize(Type.buttonSmall).height(36)
-              .margin(Theme.spaceXs).borderRadius(Theme.radiusPill).backgroundColor(Theme.accentSoft)
-              .fontColor(Theme.accent).onClick(() => this.onQuick(prompt))
-          }, (prompt: string) => prompt)
-        }.width('100%')
+      Text(dadaGuide(this.context.page)).fontSize(Type.bodySmall).fontColor(Theme.secondary)
+        .lineHeight(22).width('100%')
+      if (this.context.page === DadaPage.TRY_ON) {
+        Text(TRY_ON_BOUNDARY).fontSize(Type.caption).fontColor(Theme.accent).width('100%')
+          .padding(10).backgroundColor(Theme.accentSoft).borderRadius(Theme.radiusCard)
+      }
+      if (this.context.page === DadaPage.IMPORT && this.recognitionMessage.length > 0) {
+        Column({ space: 6 }) {
+          Text(this.recognitionMessage).fontSize(Type.bodySmall).fontColor(Theme.text)
+          if (this.recognitionColor.length > 0) { Text('颜色建议：' + this.recognitionColor).fontSize(Type.caption).fontColor(Theme.accent) }
+          if (this.recognitionCategory.length > 0) { Text('品类建议：' + this.recognitionCategory).fontSize(Type.caption).fontColor(Theme.accent) }
+        }.width('100%').alignItems(HorizontalAlign.Start).padding(12)
+          .backgroundColor(Theme.accentSoft).borderRadius(Theme.radiusCard)
+      }
+      Flex({ wrap: FlexWrap.Wrap }) {
+        ForEach(dadaShortcuts(this.context.page), (shortcut: DadaShortcut) => {
+          Button(shortcut.label, { type: ButtonType.Normal }).fontSize(Type.buttonSmall).height(48)
+            .margin(Theme.spaceXs).borderRadius(Theme.radiusPill).backgroundColor(Theme.accentSoft)
+            .fontColor(Theme.accent).enabled(!this.busy)
+            .onClick(() => this.onAction(shortcut.action, shortcut.input))
+        }, (shortcut: DadaShortcut) => shortcut.label)
+      }.width('100%')
+      if (this.feedback.length > 0) {
+        Text(this.feedback).fontSize(Type.bodySmall).fontColor(this.state === DadaState.ERROR ? Theme.warning : Theme.accent)
+          .lineHeight(22).width('100%')
       }
 
       ForEach(this.messages, (message: AssistantMessage) => this.messageRow(message),
@@ -98,11 +136,11 @@ export struct AssistantSheet {
         TextInput({ text: this.draft, placeholder: '例如：社团活动，18度' }).layoutWeight(1)
           .height(Theme.buttonHeight).fontSize(Type.bodySmall).backgroundColor(Theme.surfaceSoft)
           .borderRadius(Theme.radiusInput).onChange((value: string) => this.draft = value)
-          .onSubmit(() => this.send())
+          .enabled(!this.busy).onSubmit(() => this.send())
         Button('发送', { type: ButtonType.Normal }).height(Theme.buttonHeight).width(72)
           .borderRadius(Theme.radiusPill).backgroundColor(Theme.accent).fontColor(Theme.onAccent)
           .enabled(!this.busy).onClick(() => this.send())
       }.width('100%')
-    }.width('100%').padding({ left: Theme.spaceXl, right: Theme.spaceXl, top: Theme.spaceXl, bottom: Theme.spaceXxl })
+    }.width('100%')
   }
 }

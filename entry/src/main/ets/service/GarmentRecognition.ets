@@ -1,10 +1,8 @@
 // 衣物识别服务的纯数据契约与离线实现。
 //
-// 这里故意没有引入网络库，也没有把某个云端 SDK 写死在服务层。上层只需要依赖
-// GarmentRecognitionProvider，未来可以把同一份输入交给云端服务；当前演示版本使用
-// 文件名/Uri 中的确定性 token 做本地规则识别，明确把 source 标成 offline-file-token。
-// 这样演示时可以展示完整的“识别结果 -> 用户确认”链路，同时不会把规则命中伪装成
-// 真正的视觉模型输出。
+// 不引入网络库；GarmentRecognitionProvider 保持可替换，来源按字段明确记录。
+// 实际页面通过 GarmentRecognitionImage 的静态 Kit 适配器读取像素，使用本文件的主色算法。
+// 文件名/Uri token 仅保留为显式桌面演示入口，source 标为 offline-file-token，不能称为视觉识别。
 
 export const MIN_AUTO_RECOGNITION_CONFIDENCE: number = 0.65;
 export const RECOGNITION_SOURCE_LOCAL: string = 'offline-file-token';
@@ -524,10 +522,23 @@ export class LocalGarmentRecognitionProvider implements GarmentRecognitionProvid
   }
 }
 
+// 平台解码器与纯规则层共用这份结果契约。颜色来自实际像素，品类与材质保持空白，
+// 不把图片主色、文件名或读取失败转换成衣物属性；采用仍由页面按字段确认。
+export function recognitionFromColor(observed?: ColorObservation): GarmentRecognition {
+  const available: boolean = observed !== undefined && observed.color.length > 0;
+  const source: string = available ? RECOGNITION_SOURCE_PIXEL_COLOR : RECOGNITION_SOURCE_UNAVAILABLE;
+  const confidence: number = available && observed !== undefined ? observed.confidence : 0;
+  return { category: '', color: available && observed !== undefined ? observed.color : '', material: '',
+    confidence: confidence, source: source, userConfirmed: false, categoryConfidence: 0,
+    colorConfidence: confidence, materialConfidence: 0, categorySource: RECOGNITION_SOURCE_UNAVAILABLE,
+    colorSource: source, materialSource: RECOGNITION_SOURCE_UNAVAILABLE };
+}
+
 async function recognizeGarmentFromImage(uri: string, fileName: string = '', includeFileTokenAttributes: boolean = false):
   Promise<GarmentRecognition> {
   const tokenResult: GarmentRecognition = recognizeGarmentSync(uri, fileName);
   const observed: ColorObservation | undefined = await dominantColorFromImage(uri);
+  if (!includeFileTokenAttributes) { return recognitionFromColor(observed); }
   const category: string = includeFileTokenAttributes ? tokenResult.category : '';
   const material: string = includeFileTokenAttributes ? tokenResult.material : '';
   if (!observed) {
