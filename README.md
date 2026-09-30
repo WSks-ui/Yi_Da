@@ -30,6 +30,12 @@
 > 不是本应用现场生成的结果，页面上也保留了 `DEMO / FASHN VTON 1.5` 标注。
 > 截图在入库前缩放到 540px 宽并转为 JPEG（原图见 `artifacts/`，由脚本重新生成，不入库）。
 
+<p align="center">
+  <img src="docs/images/dada-chat.jpg" width="34%" alt="搭搭聊天：用户在右、助手在左，快捷提示位于固定输入区上方" />
+</p>
+
+2026-09-30 的聊天优化保留原有全局配色：首页只留顶栏搭搭入口，聊天改为用户右侧、搭搭左侧，快捷提示紧邻固定输入区。回复先等待约一秒，再逐字展示；这只是本地回复的呈现效果，不代表调用了聊天云服务。最新安装包、实拍与复拍方法见 [搭搭交接说明](docs/DADA_DEMO_HANDOFF.md)。
+
 ## 目录
 
 - [当前范围](#当前范围)
@@ -46,7 +52,7 @@
 | 功能 | 当前实现 |
 | --- | --- |
 | 今日 | 天气条（真实天气取不到时退回手动温度并说明来源）、衣橱入口、今日穿搭与搭配 DIY 小卡、八宫格快捷入口、今日推荐、最近日记 |
-| 搭搭助手 | 各页顶栏统一光团入口，按当前页面提供推荐、图片建议、样片演示或操作引导；连续追问只更新候选，点击“采用这套”后先落盘再发布当前搭配 |
+| 搭搭助手 | 各页顶栏统一光团入口，用户消息在右、助手在左，固定输入区与横向快捷提示，约一秒等待后逐字回复；按页面提供推荐、图片建议、样片演示或引导；连续追问只更新候选，点击“采用这套”后先落盘再发布 |
 | 衣橱 | 搜索、品类与状态筛选、季节/标签检索、详情、五种状态切换（可穿/待洗/收纳/季节隐藏/已归档）、多选批量修改、单件“多推荐/少推荐/中性”反馈、紧凑与舒适两档视图 |
 | 批量录入 | 可从系统相册选图，也可直接选择 3 张随包示例照片；同一次录入最多 10 张，逐件确认名称/品类/颜色/适穿温度/场合；可运行随包 MindSpore Lite MobileNetV2 ImageNet 模型给出少量可映射衣物类别候选，并分析图片像素主色，均由用户决定是否采用；可搜索 70 多种细类并手填材质；失败可重试或跳过 |
 | 搭配工作台 | DIY 自由画布：拖动、缩放、旋转、调整层级、撤销重做、选择底色，最多 8 件；方案命名保存后可回到原画布继续编辑 |
@@ -89,8 +95,9 @@
 ## 已运行检查
 
 ```powershell
-node scripts/check-domain.cjs          # 127 项，包含 Index、天气与试穿过程接线
-node scripts/check-index.cjs           # 52 项（已包含在 check-domain 中）
+node scripts/check-domain.cjs          # 136 项，包含 Index、回复、天气与试穿过程接线
+node scripts/check-index.cjs           # 55 项（已包含在 check-domain 中）
+node scripts/check-assistant-reply.cjs # 6 项（已包含在 check-domain 中）
 node scripts/check-weather.cjs         # 4 项（已包含在 check-domain 中）
 node scripts/check-presentation.cjs    # 11 项（已包含在 check-domain 中）
 node scripts/check-ai.cjs              # 16 项，含静态 Kit 图片颜色接线
@@ -100,8 +107,8 @@ node scripts/check-migration.cjs       # 7 项
 node scripts/check-migration-host.cjs  # 5 项
 ```
 
-- **业务检查 127 项**：含真实 `Index` 接线 52 项、天气 4 项、试穿过程 11 项，覆盖候选不改快照、采用先落盘后发布、失败重试、天气交错、过期建议、六秒时序与生命周期取消。
-- **专项检查 41 项**：图片与端侧识别 16、助手意图 4、同步 9、迁移包 7、Picker 宿主 5。与业务检查合计 168 项；没有重复累加已包含的页面或过程检查。
+- **业务检查 136 项**：含真实 `Index` 接线 55 项、回复控制器 6 项、天气 4 项、试穿过程 11 项，覆盖候选不改快照、采用先落盘后发布、失败重试、天气交错、过期建议、一秒等待、逐字时序、重复操作门禁和生命周期取消。
+- **专项检查 41 项**：图片与端侧识别 16、助手意图 4、同步 9、迁移包 7、Picker 宿主 5。与业务检查合计 177 项；没有重复累加已包含的页面、回复或过程检查。
 - 检查直接转译并执行项目的 `.ets` 业务源文件，**不替代** ArkUI、系统 API 或真机测试。
 - 若本机没有 `node_modules/typescript`，可传入 DevEco 自带的 `typescript` 路径作为第一个参数。
 
@@ -112,6 +119,7 @@ node scripts/check-migration-host.cjs  # 5 项
 .\scripts\dump-ui.ps1 -ClickableOnly   # 只看可点击元素
 .\scripts\capture-demo.ps1             # 按演示路径自动抓取截图到 artifacts\demo
 .\scripts\capture-dada-tryon.ps1       # 在试穿页拍五张实际阶段截图并记录拍摄时间，不保存记录
+.\scripts\capture-assistant-reply.ps1 # 在搭搭面板拍等待、逐字、完成三帧，只提问、不采用方案
 ```
 
 `capture-demo.ps1` 会真实操作应用：温度通过在滑块上点击并读取滑块自身数值来确认，控件位置全部从实时布局读取，每一步都校验预期文本，失败即报错而不是产出错图。
